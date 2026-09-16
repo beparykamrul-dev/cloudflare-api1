@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.wrangler/
+.cloudflare/
+*.pem
+*.key
+*.p12
+*.secret
+credentials.json
+secrets.json
+coverage/
