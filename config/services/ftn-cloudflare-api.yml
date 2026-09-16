@@ -1,0 +1,13 @@
+name: ftn-cloudflare-api
+type: control-plane
+repository: beparykamrul-dev/cloudflare-api1
+health:
+  path: /health
+  live_path: /health/live
+  ready_path: /health/ready
+  timeout_seconds: 10
+monitoring:
+  enabled: true
+deployment:
+  rollback_enabled: true
+  destructive_changes: false
