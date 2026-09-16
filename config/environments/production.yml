@@ -1,0 +1,6 @@
+environment: production
+account_alias: FTN_PRODUCTION
+approval_required: true
+strict_monitoring: true
+rollback_enabled: true
+destructive_changes: false
