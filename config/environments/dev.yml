@@ -1,0 +1,6 @@
+environment: dev
+account_alias: FTN_DEV
+approval_required: false
+strict_monitoring: false
+rollback_enabled: true
+destructive_changes: false
