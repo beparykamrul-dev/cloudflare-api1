@@ -1,0 +1,29 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Package release
+        run: tar -czf ftn-cloudflare-api-${GITHUB_SHA}.tar.gz package.json package-lock.json dist config scripts README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ftn-cloudflare-api-dev-${{ github.sha }}
+          path: ftn-cloudflare-api-${{ github.sha }}.tar.gz
