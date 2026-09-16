@@ -1,0 +1,6 @@
+environment: staging
+account_alias: FTN_STAGING
+approval_required: false
+strict_monitoring: true
+rollback_enabled: true
+destructive_changes: false
