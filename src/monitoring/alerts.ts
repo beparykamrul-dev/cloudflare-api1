@@ -1,10 +1,27 @@
-import { persistAlert } from "./alert-store.js";
-import { recordAlertTransition } from "./metrics.js";
+import { persistAlert, listActiveAlerts } from "./alert-store.js";
+import { recordAlertTransition, setActiveAlertCounts } from "./metrics.js";
 
 export type AlertSeverity = "warning" | "critical";
 export type AlertState = "firing" | "resolved";
 export interface Alert { fingerprint: string; rule: string; severity: AlertSeverity; state: AlertState; message: string; updatedAt: string; }
 const active = new Map<string, Alert>();
+
+export async function hydrateAlerts(): Promise<void> {
+  const persisted = await listActiveAlerts();
+  active.clear();
+  for (const alert of persisted) active.set(alert.fingerprint, {
+    fingerprint: alert.fingerprint,
+    rule: alert.rule,
+    severity: alert.severity,
+    state: alert.state,
+    message: alert.message,
+    updatedAt: alert.updatedAt
+  });
+  setActiveAlertCounts({
+    warning: persisted.filter((alert) => alert.severity === "warning").length,
+    critical: persisted.filter((alert) => alert.severity === "critical").length
+  });
+}
 
 export async function evaluateReadiness(database: boolean, cloudflare: boolean): Promise<Alert[]> {
   const now = new Date().toISOString();
@@ -28,4 +45,4 @@ export async function evaluateReadiness(database: boolean, cloudflare: boolean):
 }
 
 export function listAlerts(): Alert[] { return [...active.values()]; }
-export function resetAlerts(): void { active.clear(); }
+export function resetAlerts(): void { active.clear(); setActiveAlertCounts({ warning: 0, critical: 0 }); }
