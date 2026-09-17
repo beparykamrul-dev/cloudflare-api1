@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { authorize } from "../auth/authorize.js";
+import { writeAudit } from "../audit/store.js";
+import type { RequestContext } from "../audit/context.js";
 import { getDb } from "../db/client.js";
 import { enqueueDeployment, getDeployment, listDeployments, transitionDeployment } from "./queue.js";
 import { dispatchDeploymentWorkflow, verifyGitHubWebhookSignature } from "./github-actions.js";
@@ -17,10 +19,20 @@ async function serviceExists(serviceId: string): Promise<boolean> {
   return result.rowCount === 1;
 }
 
+async function audit(context: RequestContext | undefined, actorId: string, action: string, result: string, deploymentId: string, metadata: Record<string, unknown> = {}): Promise<void> {
+  if (!context) return;
+  try {
+    await writeAudit({ requestId: context.requestId, actorId, action, result, deploymentId, resource: `deployment:${deploymentId}`, metadata });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "audit_write_failed", request_id: context.requestId, action, deployment_id: deploymentId, error: error instanceof Error ? error.message : "unknown_error" }));
+  }
+}
+
 export async function handleDeploymentApi(
   req: { method?: string; headers: Record<string, string | string[] | undefined> },
   pathname: string,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  context?: RequestContext
 ): Promise<{ status: number; body: unknown } | null> {
   if (pathname === "/api/deployments" && req.method === "GET") {
     if (!authorize(req, "deployments:read")) return { status: 401, body: { error: "unauthorized" } };
@@ -35,18 +47,15 @@ export async function handleDeploymentApi(
     const repository = text(body?.repository);
     const commitSha = text(body?.commitSha);
     const environment = text(body?.environment) as DeploymentEnvironment | undefined;
-    if (!serviceId || !repository || !commitSha || !environment || !environments.has(environment)) {
-      return { status: 400, body: { error: "invalid_deployment_request" } };
-    }
+    if (!serviceId || !repository || !commitSha || !environment || !environments.has(environment)) return { status: 400, body: { error: "invalid_deployment_request" } };
     if (!/^[-\w.]+\/[-\w.]+$/.test(repository)) return { status: 400, body: { error: "invalid_repository" } };
     if (!/^[0-9a-f]{7,64}$/i.test(commitSha) && commitSha !== "HEAD") return { status: 400, body: { error: "invalid_commit_sha" } };
     if (!(await serviceExists(serviceId))) return { status: 404, body: { error: "service_not_registered" } };
-    if (environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) {
-      return { status: 409, body: { error: "production_approval_required" } };
-    }
+    if (environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) return { status: 409, body: { error: "production_approval_required" } };
 
     const record = enqueueDeployment({ serviceId, repository, commitSha, environment, requestedBy: principal.id });
     await persistDeployment(record);
+    await audit(context, principal.id, "deployment.created", "success", record.id, { serviceId, repository, commitSha, environment });
     try {
       await dispatchDeploymentWorkflow({ repository, ref: commitSha, environment, deploymentId: record.id });
       const running = transitionDeployment(record.id, "running");
@@ -55,6 +64,7 @@ export async function handleDeploymentApi(
     } catch (error) {
       const failed = transitionDeployment(record.id, "failed", error instanceof Error ? error.message : "workflow_dispatch_failed");
       if (failed) await persistDeployment(failed);
+      await audit(context, principal.id, "deployment.dispatch", "failed", record.id, { serviceId, environment });
       return { status: 502, body: { error: "workflow_dispatch_failed", deployment: failed ?? record } };
     }
   }
@@ -72,19 +82,20 @@ export async function handleDeploymentApi(
 
   const cancel = pathname.match(/^\/api\/deployments\/([^/]+)\/cancel$/);
   if (cancel && req.method === "POST") {
-    if (!authorize(req, "deployments:write")) return { status: 401, body: { error: "unauthorized" } };
+    const principal = authorize(req, "deployments:write");
+    if (!principal) return { status: 401, body: { error: "unauthorized" } };
     const record = getDeployment(cancel[1]);
     if (!record) return { status: 404, body: { error: "deployment_not_found" } };
     if (!["queued", "running"].includes(record.status)) return { status: 409, body: { error: "deployment_not_cancellable" } };
     const result = transitionDeployment(record.id, "cancelled");
-    if (result) await persistDeployment(result);
+    if (result) {
+      await persistDeployment(result);
+      await audit(context, principal.id, "deployment.cancelled", "success", result.id, { serviceId: result.serviceId, environment: result.environment });
+    }
     return { status: 200, body: { deployment: result } };
   }
 
-  if (pathname === "/api/webhooks/deployment-status" && req.method === "POST") {
-    return { status: 400, body: { error: "raw_body_required" } };
-  }
-
+  if (pathname === "/api/webhooks/deployment-status" && req.method === "POST") return { status: 400, body: { error: "raw_body_required" } };
   return null;
 }
 
@@ -92,20 +103,21 @@ export function listQueuedDeployments() { return listDeployments(); }
 
 export async function handleDeploymentStatusCallback(
   headers: Record<string, string | string[] | undefined>,
-  rawBody: string
+  rawBody: string,
+  context?: RequestContext
 ): Promise<{ status: number; body: unknown }> {
   const signature = Array.isArray(headers["x-ftn-signature-256"]) ? headers["x-ftn-signature-256"][0] : headers["x-ftn-signature-256"];
-  if (!verifyGitHubWebhookSignature(rawBody, signature, process.env.FTN_DEPLOY_CALLBACK_SECRET ?? process.env.GITHUB_WEBHOOK_SECRET)) {
-    return { status: 401, body: { error: "invalid_signature" } };
-  }
+  if (!verifyGitHubWebhookSignature(rawBody, signature, process.env.FTN_DEPLOY_CALLBACK_SECRET ?? process.env.GITHUB_WEBHOOK_SECRET)) return { status: 401, body: { error: "invalid_signature" } };
   let payload: Record<string, unknown>;
   try { payload = JSON.parse(rawBody) as Record<string, unknown>; } catch { return { status: 400, body: { error: "invalid_json_body" } }; }
   const deploymentId = text(payload.deployment_id);
   const status = text(payload.status);
   if (!deploymentId || !status || !["succeeded", "failed", "cancelled", "rolled_back"].includes(status)) return { status: 400, body: { error: "invalid_status_callback" } };
-  const result = await getDb().query("UPDATE ftn_deployments SET status=$2, health_status=$3, version=COALESCE($4,version), finished_at=CASE WHEN $2 IN ('succeeded','failed','cancelled','rolled_back') THEN now() ELSE finished_at END, metadata=metadata || $5::jsonb WHERE deployment_id=$1 RETURNING deployment_id, status, health_status, version, finished_at", [deploymentId, status, text(payload.health_status) ?? null, text(payload.version) ?? null, JSON.stringify({ callback: true, error: text(payload.error) ?? null })]);
+  const result = await getDb().query("UPDATE ftn_deployments SET status=$2, health_status=$3, version=COALESCE($4,version), finished_at=CASE WHEN $2 IN ('succeeded','failed','cancelled','rolled_back') THEN now() ELSE finished_at END, metadata=metadata || $5::jsonb WHERE deployment_id=$1 RETURNING deployment_id, service_id, environment, status, health_status, version, finished_at", [deploymentId, status, text(payload.health_status) ?? null, text(payload.version) ?? null, JSON.stringify({ callback: true, error: text(payload.error) ?? null })]);
   if (!result.rowCount) return { status: 404, body: { error: "deployment_not_found" } };
-  return { status: 200, body: { deployment: result.rows[0] } };
+  const row = result.rows[0] as { service_id?: string; environment?: string; status?: string };
+  await audit(context, "github-webhook", "deployment.callback", "success", deploymentId, { serviceId: row.service_id, environment: row.environment, status: row.status });
+  return { status: 200, body: { deployment: row } };
 }
 
 export function newDeploymentId(): string { return randomUUID(); }
