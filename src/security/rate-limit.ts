@@ -5,9 +5,12 @@ const windowMs = Number(process.env.FTN_RATE_LIMIT_WINDOW_MS ?? 60_000);
 const maxRequests = Number(process.env.FTN_RATE_LIMIT_MAX ?? 120);
 
 export function rateLimitKey(req: { socket?: { remoteAddress?: string | undefined }; headers: Record<string, string | string[] | undefined> }): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  return (value?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown");
+  if (process.env.FTN_TRUST_PROXY === "true") {
+    const forwarded = req.headers["x-forwarded-for"];
+    const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    if (value?.trim()) return value.split(",")[0].trim();
+  }
+  return req.socket?.remoteAddress || "unknown";
 }
 
 export function allowRequest(key: string): { allowed: boolean; remaining: number; retryAfter: number } {
