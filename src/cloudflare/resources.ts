@@ -18,7 +18,7 @@ export async function listZones(): Promise<unknown> {
 
 export async function getZone(zoneId: string): Promise<unknown> {
   const cf = createCloudflareClient();
-  return call(() => cf.zones.get(zoneId));
+  return call(() => (cf.zones.get as unknown as (id: string) => Promise<unknown>)(zoneId));
 }
 
 export async function listDnsRecords(zoneId: string): Promise<unknown> {
@@ -43,10 +43,14 @@ export async function deleteDnsRecord(zoneId: string, recordId: string): Promise
 
 export async function listWorkers(): Promise<unknown> {
   const cf = createCloudflareClient();
-  return call(() => cf.accounts.workers.scripts.list({ account_id: accountId() }));
+  const workers = (cf.accounts as unknown as { workers?: { scripts: { list: (params: { account_id: string }) => Promise<unknown> } } }).workers;
+  if (!workers) throw new Error("cloudflare_workers_api_unavailable");
+  return call(() => workers.scripts.list({ account_id: accountId() }));
 }
 
 export async function getWorker(scriptName: string): Promise<unknown> {
   const cf = createCloudflareClient();
-  return call(() => cf.accounts.workers.scripts.get(scriptName, { account_id: accountId() }));
+  const workers = (cf.accounts as unknown as { workers?: { scripts: { get: (name: string, params: { account_id: string }) => Promise<unknown> } } }).workers;
+  if (!workers) throw new Error("cloudflare_workers_api_unavailable");
+  return call(() => workers.scripts.get(scriptName, { account_id: accountId() }));
 }
