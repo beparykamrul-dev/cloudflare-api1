@@ -1,21 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { allowRequest } from "../src/security/rate-limit.js";
+import { createRateLimiter } from "../src/security/rate-limit.js";
 
-test("rate limiter returns structured state and blocks after the configured default limit", () => {
+test("rate limiter returns structured state and blocks after the configured limit", () => {
+  const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, maxBuckets: 100 });
   const key = `test-${Date.now()}-${Math.random()}`;
-  const first = allowRequest(key);
+  const first = limiter.allow(key);
+  const second = limiter.allow(key);
+  const third = limiter.allow(key);
+
   assert.equal(first.allowed, true);
-  assert.equal(first.remaining, 119);
-  assert.ok(first.retryAfter >= 1);
-
-  let last = first;
-  for (let i = 1; i < 120; i += 1) last = allowRequest(key);
-  assert.equal(last.allowed, true);
-  assert.equal(last.remaining, 0);
-
-  const blocked = allowRequest(key);
-  assert.equal(blocked.allowed, false);
-  assert.equal(blocked.remaining, 0);
-  assert.ok(blocked.retryAfter >= 1);
+  assert.equal(first.remaining, 1);
+  assert.equal(second.allowed, true);
+  assert.equal(second.remaining, 0);
+  assert.equal(third.allowed, false);
+  assert.equal(third.remaining, 0);
+  assert.ok(third.retryAfter >= 1);
 });
