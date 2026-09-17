@@ -43,9 +43,13 @@ export function recordDeployment(environment: string, status: string, durationSe
 
 export function recordAlertTransition(rule: string, severity: "warning" | "critical", state: "firing" | "resolved"): void {
   inc(alertTransitions, `${rule}|${severity}|${state}`);
-  const keyName = severity;
-  const current = activeAlerts.get(keyName) ?? 0;
-  activeAlerts.set(keyName, state === "firing" ? current + 1 : Math.max(0, current - 1));
+  const current = activeAlerts.get(severity) ?? 0;
+  activeAlerts.set(severity, state === "firing" ? current + 1 : Math.max(0, current - 1));
+}
+
+export function setActiveAlertCounts(counts: { warning: number; critical: number }): void {
+  activeAlerts.set("warning", Math.max(0, Math.floor(counts.warning)));
+  activeAlerts.set("critical", Math.max(0, Math.floor(counts.critical)));
 }
 
 export function metricsText(): string {
