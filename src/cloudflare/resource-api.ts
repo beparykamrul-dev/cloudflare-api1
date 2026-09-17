@@ -9,13 +9,26 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
   const write = authorize(req, "cloudflare:write");
   if (pathname === "/api/cloudflare/zones" && req.method === "GET") return read ? { status: 200, body: await listZones() } : { status: 401, body: { error: "unauthorized" } };
   const zoneMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)$/);
-  if (zoneMatch && req.method === "GET") return read ? { status: 200, body: await getZone(zoneMatch[1]) } : { status: 401, body: { error: "unauthorized" } };
+  if (zoneMatch && req.method === "GET") {
+    const zoneId = zoneMatch[1];
+    if (!zoneId) return { status: 400, body: { error: "invalid_zone_id" } };
+    return read ? { status: 200, body: await getZone(zoneId) } : { status: 401, body: { error: "unauthorized" } };
+  }
   const dnsMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/dns-records$/);
-  if (dnsMatch && req.method === "GET") return read ? { status: 200, body: await listDnsRecords(dnsMatch[1]) } : { status: 401, body: { error: "unauthorized" } };
-  if (dnsMatch && req.method === "POST") return write ? { status: 201, body: await createDnsRecord(dnsMatch[1], body ?? {}) } : { status: 403, body: { error: "forbidden" } };
+  if (dnsMatch) {
+    const zoneId = dnsMatch[1];
+    if (!zoneId) return { status: 400, body: { error: "invalid_zone_id" } };
+    if (req.method === "GET") return read ? { status: 200, body: await listDnsRecords(zoneId) } : { status: 401, body: { error: "unauthorized" } };
+    if (req.method === "POST") return write ? { status: 201, body: await createDnsRecord(zoneId, body ?? {}) } : { status: 403, body: { error: "forbidden" } };
+  }
   const recordMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/dns-records\/([^/]+)$/);
-  if (recordMatch && req.method === "PUT") return write ? { status: 200, body: await updateDnsRecord(recordMatch[1], recordMatch[2], body ?? {}) } : { status: 403, body: { error: "forbidden" } };
-  if (recordMatch && req.method === "DELETE") return write ? { status: 200, body: await deleteDnsRecord(recordMatch[1], recordMatch[2]) } : { status: 403, body: { error: "forbidden" } };
+  if (recordMatch) {
+    const zoneId = recordMatch[1];
+    const recordId = recordMatch[2];
+    if (!zoneId || !recordId) return { status: 400, body: { error: "invalid_record_path" } };
+    if (req.method === "PUT") return write ? { status: 200, body: await updateDnsRecord(zoneId, recordId, body ?? {}) } : { status: 403, body: { error: "forbidden" } };
+    if (req.method === "DELETE") return write ? { status: 200, body: await deleteDnsRecord(zoneId, recordId) } : { status: 403, body: { error: "forbidden" } };
+  }
   if (pathname === "/api/cloudflare/workers" && req.method === "GET") return read ? { status: 200, body: await listWorkers() } : { status: 401, body: { error: "unauthorized" } };
   return null;
 }
