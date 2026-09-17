@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { principalFromApiToken } from "./token-store.js";
 import { ROLE_PERMISSIONS, type Permission, type Principal, type Role } from "./types.js";
 
 function headerValue(req: { headers: Record<string, string | string[] | undefined> }, name: string): string | undefined {
@@ -20,8 +21,11 @@ function configuredTokenPrincipal(token: string): Principal | null {
 
 export function principalFromRequest(req: { headers: Record<string, string | string[] | undefined> }): Principal | null {
   const authorization = headerValue(req, "authorization");
-  if (authorization?.startsWith("Bearer ")) return configuredTokenPrincipal(authorization.slice(7).trim());
-  if (process.env.FTN_AUTH_ALLOW_ROLE_HEADERS === "true") {
+  if (authorization?.startsWith("Bearer ")) {
+    const token = authorization.slice(7).trim();
+    return principalFromApiToken(token) ?? configuredTokenPrincipal(token);
+  }
+  if (process.env.FTN_ENVIRONMENT === "development" && process.env.FTN_AUTH_ALLOW_ROLE_HEADERS === "true") {
     const role = headerValue(req, "x-ftn-role");
     if (role && role in ROLE_PERMISSIONS) return { id: headerValue(req, "x-ftn-principal") ?? randomUUID(), role: role as Role, permissions: ROLE_PERMISSIONS[role as Role] };
   }
