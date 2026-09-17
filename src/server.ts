@@ -27,7 +27,6 @@ function json(res: import("node:http").ServerResponse, status: number, body: unk
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   for (const [name, value] of Object.entries(securityHeaders())) res.setHeader(name, value);
-  recordRequest("HTTP", "response", status);
   res.end(JSON.stringify(body));
 }
 
@@ -59,6 +58,11 @@ async function inventory(force = false) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const requestStarted = process.hrtime.bigint();
+  res.once("finish", () => {
+    const durationSeconds = Number(process.hrtime.bigint() - requestStarted) / 1_000_000_000;
+    recordRequest(req.method ?? "UNKNOWN", url.pathname, res.statusCode, durationSeconds);
+  });
   const requestId = randomUUID();
   for (const [name, value] of Object.entries(securityHeaders())) res.setHeader(name, value);
   res.setHeader("x-request-id", requestId);
