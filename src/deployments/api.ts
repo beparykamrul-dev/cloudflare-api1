@@ -3,10 +3,11 @@ import { authorize } from "../auth/authorize.js";
 import { writeAudit } from "../audit/store.js";
 import type { RequestContext } from "../audit/context.js";
 import { getDb } from "../db/client.js";
-import { enqueueDeployment, getDeployment, listDeployments, transitionDeployment } from "./queue.js";
+import { enqueueDeployment, getDeployment, listDeployments, syncDeploymentCallback, transitionDeployment } from "./queue.js";
 import { dispatchDeploymentWorkflow, verifyGitHubWebhookSignature } from "./github-actions.js";
 import { persistDeployment, listPersistedDeployments } from "./store.js";
-import type { DeploymentEnvironment } from "./types.js";
+import { recordDeployment } from "../monitoring/metrics.js";
+import type { DeploymentEnvironment, DeploymentStatus } from "./types.js";
 
 const environments = new Set<DeploymentEnvironment>(["development", "staging", "production"]);
 const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "rolled_back"]);
@@ -179,19 +180,19 @@ export async function handleDeploymentStatusCallback(
   let payload: Record<string, unknown>;
   try { payload = JSON.parse(rawBody) as Record<string, unknown>; } catch { return { status: 400, body: { error: "invalid_json_body" } }; }
   const deploymentId = text(payload.deployment_id);
-  const status = text(payload.status);
+  const status = text(payload.status) as DeploymentStatus | undefined;
   if (!deploymentId || !status || !terminalStatuses.has(status)) return { status: 400, body: { error: "invalid_status_callback" } };
 
   const expectedRepository = text(payload.repository);
   const expectedServiceId = text(payload.service_id);
   const expectedEnvironment = text(payload.environment);
   const result = await getDb().query(
-    `SELECT deployment_id, service_id, environment, commit_sha, status, health_status, version, metadata
+    `SELECT deployment_id, service_id, environment, commit_sha, status, health_status, version, metadata, started_at
        FROM ftn_deployments WHERE deployment_id=$1`,
     [deploymentId]
   );
   if (!result.rowCount) return { status: 404, body: { error: "deployment_not_found" } };
-  const current = result.rows[0] as { service_id?: string; environment?: string; commit_sha?: string; status?: string; metadata?: Record<string, unknown> };
+  const current = result.rows[0] as { service_id?: string; environment?: string; commit_sha?: string; status?: string; health_status?: string; metadata?: Record<string, unknown>; started_at?: string | Date | null };
   const metadata = current.metadata ?? {};
   const repository = typeof metadata.repository === "string" ? metadata.repository : undefined;
   if (expectedRepository && expectedRepository !== repository) return { status: 409, body: { error: "callback_repository_mismatch" } };
@@ -199,19 +200,28 @@ export async function handleDeploymentStatusCallback(
   if (expectedEnvironment && expectedEnvironment !== current.environment) return { status: 409, body: { error: "callback_environment_mismatch" } };
   if (current.status && terminalStatuses.has(current.status) && current.status !== status) return { status: 409, body: { error: "deployment_already_terminal" } };
 
+  const errorMessage = text(payload.error);
   const version = text(payload.version) ?? current.commit_sha ?? null;
   const updated = await getDb().query(
     `UPDATE ftn_deployments
         SET status=$2,
-            health_status=$3,
+            health_status=COALESCE($3,health_status),
             version=COALESCE($4,version),
             finished_at=CASE WHEN $2 IN ('succeeded','failed','cancelled','rolled_back') THEN now() ELSE finished_at END,
             metadata=metadata || $5::jsonb
       WHERE deployment_id=$1
       RETURNING deployment_id, service_id, environment, status, health_status, version, finished_at`,
-    [deploymentId, status, text(payload.health_status) ?? null, version, JSON.stringify({ callback: true, error: text(payload.error) ?? null })]
+    [deploymentId, status, text(payload.health_status), version, JSON.stringify({ callback: true, error: errorMessage })]
   );
   const row = updated.rows[0] as { service_id?: string; environment?: string; status?: string };
+
+  const local = syncDeploymentCallback(deploymentId, status, { error: errorMessage });
+  if (local && local.status === status) {
+    const startedMs = current.started_at ? new Date(current.started_at).getTime() : undefined;
+    const duration = startedMs !== undefined && Number.isFinite(startedMs) ? (Date.now() - startedMs) / 1000 : undefined;
+    recordDeployment(local.environment, status, duration);
+  }
+
   await audit(context, "github-webhook", "deployment.callback", "success", deploymentId, { serviceId: row.service_id, environment: row.environment, status: row.status });
   return { status: 200, body: { deployment: row } };
 }
