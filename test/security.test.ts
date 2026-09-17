@@ -2,29 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { allowRequest } from "../src/security/rate-limit.js";
 
-test("rate limiter returns structured state and blocks after the configured limit", () => {
-  const originalMax = process.env.FTN_RATE_LIMIT_MAX;
-  const originalWindow = process.env.FTN_RATE_LIMIT_WINDOW_MS;
-  process.env.FTN_RATE_LIMIT_MAX = "2";
-  process.env.FTN_RATE_LIMIT_WINDOW_MS = "60000";
+test("rate limiter returns structured state and blocks after the configured default limit", () => {
+  const key = `test-${Date.now()}-${Math.random()}`;
+  const first = allowRequest(key);
+  assert.equal(first.allowed, true);
+  assert.equal(first.remaining, 119);
+  assert.ok(first.retryAfter >= 1);
 
-  try {
-    const key = `test-${Date.now()}-${Math.random()}`;
-    const first = allowRequest(key);
-    const second = allowRequest(key);
-    const third = allowRequest(key);
+  let last = first;
+  for (let i = 1; i < 120; i += 1) last = allowRequest(key);
+  assert.equal(last.allowed, true);
+  assert.equal(last.remaining, 0);
 
-    assert.equal(first.allowed, true);
-    assert.equal(first.remaining, 1);
-    assert.equal(second.allowed, true);
-    assert.equal(second.remaining, 0);
-    assert.equal(third.allowed, false);
-    assert.equal(third.remaining, 0);
-    assert.ok(third.retryAfter >= 1);
-  } finally {
-    if (originalMax === undefined) delete process.env.FTN_RATE_LIMIT_MAX;
-    else process.env.FTN_RATE_LIMIT_MAX = originalMax;
-    if (originalWindow === undefined) delete process.env.FTN_RATE_LIMIT_WINDOW_MS;
-    else process.env.FTN_RATE_LIMIT_WINDOW_MS = originalWindow;
-  }
+  const blocked = allowRequest(key);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.remaining, 0);
+  assert.ok(blocked.retryAfter >= 1);
 });
