@@ -6,6 +6,7 @@ import { authorize, authorizationEnabled } from "./auth/authorize.js";
 import { loadApiTokens } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
+import { handleDnsApi } from "./dns/api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
@@ -80,6 +81,10 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/cloudflare/")) {
       const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
       const result = await handleCloudflareResource(req, url.pathname, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
+    }
+    if (url.pathname.startsWith("/api/dns/")) {
+      const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
+      const result = await handleDnsApi(req, url, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
     }
     if (req.method === "GET" && url.pathname === "/api/inventory") {
       if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
