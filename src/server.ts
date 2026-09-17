@@ -75,7 +75,11 @@ const server = createServer(async (req, res) => {
   res.once("finish", () => recordRequest(req.method ?? "GET", new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`).pathname, res.statusCode, Number(process.hrtime.bigint() - startedAt) / 1e9));
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-    if (!allowRequest(rateLimitKey(req))) return json(res, 429, { error: "rate_limited", request_id: requestId });
+    const limit = allowRequest(rateLimitKey(req));
+    if (!limit.allowed) {
+      res.setHeader("retry-after", String(limit.retryAfter));
+      return json(res, 429, { error: "rate_limited", request_id: requestId, retry_after: limit.retryAfter });
+    }
     if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health/live") return json(res, 200, { status: "live", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health/ready") {
