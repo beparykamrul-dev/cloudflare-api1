@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { discoverInventory } from "./inventory/discovery.js";
 import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
+import type { InventoryItem } from "./inventory/types.js";
 import { authorize, authorizationEnabled } from "./auth/authorize.js";
 import { loadApiTokens } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
@@ -55,12 +56,11 @@ async function readJson(req: import("node:http").IncomingMessage): Promise<Recor
   }
 }
 
-async function inventory(refresh = false) {
+async function inventory(refresh = false): Promise<{ observedAt: string; items: InventoryItem[] }> {
   const cached = getInventorySnapshot();
   if (!refresh && cached && Date.now() - new Date(cached.observedAt).getTime() < inventoryTtlMs) return cached;
   const snapshot = await discoverInventory();
-  setInventorySnapshot(snapshot);
-  return snapshot;
+  return setInventorySnapshot(snapshot);
 }
 
 const server = createServer(async (req, res) => {
