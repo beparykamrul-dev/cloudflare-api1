@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { discoverInventory } from "./inventory/discovery.js";
 import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
-import { authorize } from "./auth/authorize.js";
+import { authorize, authorizationEnabled } from "./auth/authorize.js";
+import { loadApiTokens } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
@@ -10,12 +11,15 @@ import { handleControlPanelApi } from "./control-panel/api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
 import { assertProductionConfig } from "./security/config.js";
 import { securityHeaders } from "./security/headers.js";
+import { checkDb } from "./db/client.js";
 
 assertProductionConfig();
 const port = Number(process.env.PORT ?? 8080);
 const environment = process.env.FTN_ENVIRONMENT ?? "development";
 const cacheTtlMs = Number(process.env.INVENTORY_CACHE_TTL_MS ?? 60_000);
 const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1_048_576);
+
+if (authorizationEnabled() && process.env.DATABASE_URL) await loadApiTokens();
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -60,8 +64,10 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health/live") return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { status: "ok", environment, service: "ftn-cloudflare-api", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health/ready") {
-      const ready = Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
-      return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", request_id: requestId });
+      const dbReady = process.env.DATABASE_URL ? await checkDb() : environment === "development";
+      const cloudflareReady = Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
+      const ready = dbReady && cloudflareReady;
+      return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", checks: { database: dbReady, cloudflare: cloudflareReady }, request_id: requestId });
     }
     if (req.method === "GET" && url.pathname === "/metrics") { res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); return res.end(metricsText()); }
     if (req.method === "GET" && url.pathname === "/api/auth/me") {
