@@ -1,7 +1,11 @@
 import { authorize } from "../auth/authorize.js";
 import { writeAudit } from "../audit/store.js";
 import type { RequestContext } from "../audit/context.js";
-import { createDnsRecord, deleteDnsRecord, getWorker, getZone, listDnsRecords, listWorkers, listZones, updateDnsRecord } from "./resources.js";
+import {
+  createDnsRecord, deleteDnsRecord, getWorker, getZone, listAiGateways, listContainers, listD1Databases,
+  listDnsRecords, listHyperdriveConfigs, listKvNamespaces, listQueues, listR2Buckets, listVectorizeIndexes,
+  listWorkers, listZoneWorkerRoutes, listZones, updateDnsRecord
+} from "./resources.js";
 
 type Req = { method?: string; headers: Record<string, string | string[] | undefined> };
 type Response = { status: number; body: unknown };
@@ -14,6 +18,11 @@ async function audit(context: RequestContext, actorId: string, action: string, r
   }
 }
 
+const familyRoutes: Array<[string, () => Promise<unknown>]> = [
+  ["r2", listR2Buckets], ["d1", listD1Databases], ["kv", listKvNamespaces], ["queues", listQueues],
+  ["vectorize", listVectorizeIndexes], ["hyperdrive", listHyperdriveConfigs], ["ai-gateway", listAiGateways], ["containers", listContainers]
+];
+
 export async function handleCloudflareResource(req: Req, pathname: string, body?: Record<string, unknown>, context?: RequestContext): Promise<Response | null> {
   const read = authorize(req, "cloudflare:read");
   const write = authorize(req, "cloudflare:write");
@@ -24,6 +33,16 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
     if (!zoneId) return { status: 400, body: { error: "invalid_zone_id" } };
     return read ? { status: 200, body: await getZone(zoneId) } : { status: 401, body: { error: "unauthorized" } };
   }
+
+  if (req.method === "GET" && read) {
+    const family = familyRoutes.find(([name]) => pathname === `/api/cloudflare/${name}`);
+    if (family) return { status: 200, body: await family[1]() };
+  }
+  if (req.method === "GET" && read) {
+    const routeMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/worker-routes$/);
+    if (routeMatch?.[1]) return { status: 200, body: await listZoneWorkerRoutes(routeMatch[1]) };
+  }
+
   const dnsMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/dns-records$/);
   if (dnsMatch) {
     const zoneId = dnsMatch[1];
