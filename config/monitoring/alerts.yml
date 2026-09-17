@@ -1,0 +1,20 @@
+version: 1
+service: ftn-cloudflare-api
+interval: 30s
+rules:
+  - name: api_down
+    expr: up{job="ftn-cloudflare-api"} == 0
+    for: 2m
+    severity: critical
+  - name: api_5xx_rate
+    expr: sum(rate(ftn_http_errors_total[5m])) / clamp_min(sum(rate(ftn_http_requests_total[5m])), 1) > 0.05
+    for: 5m
+    severity: warning
+  - name: api_latency_p95
+    expr: histogram_quantile(0.95, sum by (le) (rate(ftn_http_request_duration_seconds_bucket[5m]))) > 1
+    for: 5m
+    severity: warning
+  - name: api_latency_p99
+    expr: histogram_quantile(0.99, sum by (le) (rate(ftn_http_request_duration_seconds_bucket[5m]))) > 3
+    for: 5m
+    severity: critical
