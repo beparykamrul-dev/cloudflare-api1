@@ -36,25 +36,18 @@ export function transitionDeployment(id: string, status: DeploymentStatus, error
   return record;
 }
 
-/**
- * Applies an authenticated external deployment callback to the in-memory record.
- * The database remains the source of truth; a missing local record is expected
- * after a restart or horizontal scaling and is therefore not an error.
- */
+/** Apply an authenticated terminal callback to a local queue record. */
 export function syncDeploymentCallback(
   id: string,
   status: DeploymentStatus,
-  options: { error?: string; healthStatus?: string; version?: string } = {}
+  options: { error?: string } = {}
 ): DeploymentRecord | undefined {
   const record = getDeployment(id);
   if (!record) return undefined;
   if (!terminalStatuses.has(status)) throw new Error("invalid_terminal_status");
   if (terminalStatuses.has(record.status) && record.status !== status) throw new Error("deployment_already_terminal");
-
   record.status = status;
   if (options.error) record.error = options.error;
-  if (options.version) record.version = options.version;
-  if (options.healthStatus) record.healthStatus = options.healthStatus;
   record.finishedAt = record.finishedAt ?? new Date().toISOString();
   active.delete(record.serviceId);
   return record;
