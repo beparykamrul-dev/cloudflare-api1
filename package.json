@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "validate:config": "node scripts/validate-config.mjs",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "auth:token": "tsx scripts/create-api-token.ts"
   },
   "dependencies": {
     "cloudflare": "^4.0.0",
