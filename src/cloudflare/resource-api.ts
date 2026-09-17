@@ -6,6 +6,7 @@ import {
   listDnsRecords, listHyperdriveConfigs, listKvNamespaces, listQueues, listR2Buckets, listVectorizeIndexes,
   listWorkers, listZoneWorkerRoutes, listZones, updateDnsRecord
 } from "./resources.js";
+import { validateCloudflareIdentifier, validateDnsRecordBody } from "./validation.js";
 
 type Req = { method?: string; headers: Record<string, string | string[] | undefined> };
 type Response = { status: number; body: unknown };
@@ -30,7 +31,8 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
   const zoneMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)$/);
   if (zoneMatch && req.method === "GET") {
     const zoneId = zoneMatch[1];
-    if (!zoneId) return { status: 400, body: { error: "invalid_zone_id" } };
+    const validation = validateCloudflareIdentifier(zoneId, "zone_id");
+    if (validation) return { status: 400, body: { error: validation } };
     return read ? { status: 200, body: await getZone(zoneId) } : { status: 401, body: { error: "unauthorized" } };
   }
 
@@ -40,16 +42,23 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
   }
   if (req.method === "GET" && read) {
     const routeMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/worker-routes$/);
-    if (routeMatch?.[1]) return { status: 200, body: await listZoneWorkerRoutes(routeMatch[1]) };
+    if (routeMatch?.[1]) {
+      const validation = validateCloudflareIdentifier(routeMatch[1], "zone_id");
+      if (validation) return { status: 400, body: { error: validation } };
+      return { status: 200, body: await listZoneWorkerRoutes(routeMatch[1]) };
+    }
   }
 
   const dnsMatch = pathname.match(/^\/api\/cloudflare\/zones\/([^/]+)\/dns-records$/);
   if (dnsMatch) {
     const zoneId = dnsMatch[1];
-    if (!zoneId) return { status: 400, body: { error: "invalid_zone_id" } };
+    const zoneValidation = validateCloudflareIdentifier(zoneId, "zone_id");
+    if (zoneValidation) return { status: 400, body: { error: zoneValidation } };
     if (req.method === "GET") return read ? { status: 200, body: await listDnsRecords(zoneId) } : { status: 401, body: { error: "unauthorized" } };
     if (req.method === "POST") {
       if (!write) return { status: 403, body: { error: "forbidden" } };
+      const bodyValidation = validateDnsRecordBody(body ?? {});
+      if (bodyValidation) return { status: 400, body: { error: bodyValidation } };
       const principal = authorize(req, "cloudflare:write");
       try {
         const created = await createDnsRecord(zoneId, body ?? {});
@@ -65,9 +74,13 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
   if (recordMatch) {
     const zoneId = recordMatch[1];
     const recordId = recordMatch[2];
-    if (!zoneId || !recordId) return { status: 400, body: { error: "invalid_record_path" } };
+    const zoneValidation = validateCloudflareIdentifier(zoneId, "zone_id");
+    const recordValidation = validateCloudflareIdentifier(recordId, "record_id");
+    if (zoneValidation || recordValidation) return { status: 400, body: { error: zoneValidation ?? recordValidation } };
     if (req.method === "PUT") {
       if (!write) return { status: 403, body: { error: "forbidden" } };
+      const bodyValidation = validateDnsRecordBody(body ?? {});
+      if (bodyValidation) return { status: 400, body: { error: bodyValidation } };
       const principal = authorize(req, "cloudflare:write");
       try {
         const updated = await updateDnsRecord(zoneId, recordId, body ?? {});
@@ -95,7 +108,8 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
   const workerMatch = pathname.match(/^\/api\/cloudflare\/workers\/([^/]+)$/);
   if (workerMatch && req.method === "GET") {
     const scriptName = workerMatch[1];
-    if (!scriptName) return { status: 400, body: { error: "invalid_worker_name" } };
+    const validation = validateCloudflareIdentifier(scriptName, "worker_name");
+    if (validation) return { status: 400, body: { error: validation } };
     return read ? { status: 200, body: await getWorker(decodeURIComponent(scriptName)) } : { status: 401, body: { error: "unauthorized" } };
   }
   return null;
