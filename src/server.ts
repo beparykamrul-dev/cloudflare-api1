@@ -4,10 +4,12 @@ import { discoverInventory } from "./inventory/discovery.js";
 import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
 import { authorize } from "./auth/authorize.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
+import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 
 const port = Number(process.env.PORT ?? 8080);
 const environment = process.env.FTN_ENVIRONMENT ?? "development";
 const cacheTtlMs = Number(process.env.INVENTORY_CACHE_TTL_MS ?? 60_000);
+const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1_048_576);
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -15,6 +17,21 @@ function json(res: import("node:http").ServerResponse, status: number, body: unk
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
   res.end(JSON.stringify(body));
+}
+
+async function readJson(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBodyBytes) throw new Error("request_body_too_large");
+    chunks.push(buffer);
+  }
+  if (!size) return {};
+  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_json_body");
+  return parsed as Record<string, unknown>;
 }
 
 async function inventory(force = false) {
@@ -46,6 +63,11 @@ const server = createServer(async (req, res) => {
       if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId });
       return json(res, 200, { request_id: requestId, principal });
     }
+    if (url.pathname.startsWith("/api/cloudflare/")) {
+      const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
+      const result = await handleCloudflareResource(req, url.pathname, body);
+      if (result) return json(res, result.status, { request_id: requestId, ...result.body as Record<string, unknown> });
+    }
     if (req.method === "GET" && url.pathname === "/api/inventory") {
       if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
       const snapshot = await inventory(url.searchParams.get("refresh") === "true");
@@ -63,8 +85,10 @@ const server = createServer(async (req, res) => {
     }
     return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
-    console.error(JSON.stringify({ request_id: requestId, error: error instanceof Error ? error.message : "unknown_error" }));
-    return json(res, 500, { error: "internal_error", request_id: requestId });
+    const message = error instanceof Error ? error.message : "unknown_error";
+    console.error(JSON.stringify({ request_id: requestId, error: message }));
+    const status = message === "request_body_too_large" ? 413 : message === "invalid_json_body" ? 400 : 500;
+    return json(res, status, { error: status === 500 ? "internal_error" : message, request_id: requestId });
   }
 });
 
