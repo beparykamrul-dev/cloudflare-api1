@@ -12,6 +12,7 @@ import { metricsText, recordRequest } from "./monitoring/metrics.js";
 import { evaluateReadiness } from "./monitoring/alerts.js";
 import { handleMonitoringApi } from "./monitoring/api.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
+import { handleControlPlaneDataApi } from "./control-panel/data-api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
 import { assertProductionConfig } from "./security/config.js";
 import { securityHeaders } from "./security/headers.js";
@@ -82,6 +83,7 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/metrics") { res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); return res.end(metricsText()); }
     if (req.method === "GET" && url.pathname === "/api/auth/me") { const principal = authorize(req, "services:read"); if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId }); return json(res, 200, { request_id: requestId, principal }); }
     if (url.pathname === "/api/panel" && req.method === "GET") { const result = handleControlPanelApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
+    if (url.pathname === "/api/services" || url.pathname === "/api/audit") { const result = await handleControlPlaneDataApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname.startsWith("/api/monitoring/")) { const result = await handleMonitoringApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") { const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req)); return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname.startsWith("/api/deployments")) { const body = req.method === "POST" ? await readJson(req) : undefined; const result = await handleDeploymentApi(req, url.pathname, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
