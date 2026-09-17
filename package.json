@@ -9,13 +9,16 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "validate:config": "node scripts/validate-config.mjs"
+    "validate:config": "node scripts/validate-config.mjs",
+    "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
-    "cloudflare": "^4.0.0"
+    "cloudflare": "^4.0.0",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.5",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
   }
