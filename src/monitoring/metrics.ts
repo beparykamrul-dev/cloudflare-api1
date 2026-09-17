@@ -6,6 +6,8 @@ const errors: CounterMap = new Map();
 const latency: Map<string, Histogram> = new Map();
 const deployments: CounterMap = new Map();
 const deploymentDuration: Map<string, Histogram> = new Map();
+const alertTransitions: CounterMap = new Map();
+const activeAlerts: CounterMap = new Map();
 let startedAt = Date.now();
 const latencyBuckets = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 const deploymentBuckets = [1, 5, 10, 30, 60, 120, 300, 600, 1800];
@@ -39,6 +41,13 @@ export function recordDeployment(environment: string, status: string, durationSe
   }
 }
 
+export function recordAlertTransition(rule: string, severity: "warning" | "critical", state: "firing" | "resolved"): void {
+  inc(alertTransitions, `${rule}|${severity}|${state}`);
+  const keyName = severity;
+  const current = activeAlerts.get(keyName) ?? 0;
+  activeAlerts.set(keyName, state === "firing" ? current + 1 : Math.max(0, current - 1));
+}
+
 export function metricsText(): string {
   const lines = ["# HELP ftn_http_requests_total Total HTTP requests.", "# TYPE ftn_http_requests_total counter"];
   for (const [name, value] of requests) lines.push(`ftn_http_requests_total{route="${escapeLabel(name)}"} ${value}`);
@@ -59,6 +68,14 @@ export function metricsText(): string {
     lines.push(`ftn_deployment_duration_seconds_count{environment="${escapeLabel(environment)}"} ${h.count}`);
   }
 
+  lines.push("# HELP ftn_alert_transitions_total Alert state transitions.", "# TYPE ftn_alert_transitions_total counter");
+  for (const [name, value] of alertTransitions) {
+    const [rule, severity, state] = name.split("|");
+    lines.push(`ftn_alert_transitions_total{rule="${escapeLabel(rule)}",severity="${escapeLabel(severity)}",state="${escapeLabel(state)}"} ${value}`);
+  }
+  lines.push("# HELP ftn_alerts_active Active alerts by severity.", "# TYPE ftn_alerts_active gauge");
+  for (const severity of ["warning", "critical"]) lines.push(`ftn_alerts_active{severity="${severity}"} ${activeAlerts.get(severity) ?? 0}`);
+
   lines.push("# HELP ftn_http_request_duration_seconds HTTP request duration in seconds.", "# TYPE ftn_http_request_duration_seconds histogram");
   for (const [name, h] of latency) {
     for (const bucket of latencyBuckets) lines.push(`ftn_http_request_duration_seconds_bucket{route="${escapeLabel(name)}",le="${bucket}"} ${h.buckets.get(bucket) ?? 0}`);
@@ -70,5 +87,5 @@ export function metricsText(): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function resetMetrics(): void { requests.clear(); errors.clear(); latency.clear(); deployments.clear(); deploymentDuration.clear(); startedAt = Date.now(); }
+export function resetMetrics(): void { requests.clear(); errors.clear(); latency.clear(); deployments.clear(); deploymentDuration.clear(); alertTransitions.clear(); activeAlerts.clear(); startedAt = Date.now(); }
 function escapeLabel(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"'); }
