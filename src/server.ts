@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { discoverInventory } from "./inventory/discovery.js";
+import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
 
 const port = Number(process.env.PORT ?? 8080);
 const environment = process.env.FTN_ENVIRONMENT ?? "development";
+const cacheTtlMs = Number(process.env.INVENTORY_CACHE_TTL_MS ?? 60_000);
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -11,29 +13,35 @@ function json(res: import("node:http").ServerResponse, status: number, body: unk
   res.end(JSON.stringify(body));
 }
 
+async function inventory(force = false) {
+  const cached = getInventorySnapshot();
+  if (!force && cached && Date.now() - Date.parse(cached.observedAt) < cacheTtlMs) return cached;
+  return setInventorySnapshot(await discoverInventory());
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const requestId = randomUUID();
-
   try {
-    if (req.method === "GET" && url.pathname === "/health/live") {
-      return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId });
-    }
-
-    if (req.method === "GET" && url.pathname === "/health") {
-      return json(res, 200, { status: "ok", environment, service: "ftn-cloudflare-api", request_id: requestId });
-    }
-
+    if (req.method === "GET" && url.pathname === "/health/live") return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId });
+    if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { status: "ok", environment, service: "ftn-cloudflare-api", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health/ready") {
       const ready = Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
       return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", request_id: requestId });
     }
-
     if (req.method === "GET" && url.pathname === "/api/inventory") {
-      const inventory = await discoverInventory();
-      return json(res, 200, { request_id: requestId, count: inventory.length, items: inventory });
+      const snapshot = await inventory(url.searchParams.get("refresh") === "true");
+      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items });
     }
-
+    if (req.method === "GET" && url.pathname.startsWith("/api/inventory/")) {
+      const kind = url.pathname.split("/").pop();
+      const snapshot = await inventory(false);
+      const aliases: Record<string, string> = { accounts: "account", zones: "zone", workers: "worker", storage: "r2_bucket", ai: "ai_gateway", queues: "queue", kv: "kv_namespace", d1: "d1_database", vectorize: "vectorize_index", hyperdrive: "hyperdrive", containers: "container" };
+      const resourceType = aliases[kind ?? ""];
+      if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId });
+      const items = snapshot.items.filter((item) => item.resourceType === resourceType);
+      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items });
+    }
     return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
     console.error(JSON.stringify({ request_id: requestId, error: error instanceof Error ? error.message : "unknown_error" }));
@@ -41,6 +49,4 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`ftn-cloudflare-api listening on ${port}`);
-});
+server.listen(port, "0.0.0.0", () => console.log(`ftn-cloudflare-api listening on ${port}`));
