@@ -4,7 +4,7 @@ import { listActiveAlerts, listAlertHistory } from "./alert-store.js";
 
 export async function handleMonitoringApi(req: { method?: string; headers: Record<string, string | string[] | undefined> }, pathname: string, search?: URLSearchParams): Promise<{ status: number; body: unknown } | null> {
   if (req.method !== "GET") return null;
-  if (!authorize(req, "inventory:read")) return { status: 401, body: { error: "unauthorized" } };
+  if (!authorize(req, "monitoring:read")) return { status: 401, body: { error: "unauthorized" } };
 
   if (pathname === "/api/monitoring/alerts") {
     const persisted = await listActiveAlerts();
