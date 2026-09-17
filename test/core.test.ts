@@ -8,8 +8,8 @@ test("drift detects missing and extra resources without mutating inputs", () => 
   const expected = [resource("zone-a", "a.example")];
   const observed = [resource("zone-b", "b.example")];
   const result = detectDrift(expected, observed);
-  assert.equal(result.find((x) => x.resourceId === "zone-a")?.status, "MISSING");
-  assert.equal(result.find((x) => x.resourceId === "zone-b")?.status, "EXTRA");
+  assert.equal(result.find((x) => x.key === "zone:zone-a")?.status, "MISSING");
+  assert.equal(result.find((x) => x.key === "zone:zone-b")?.status, "EXTRA");
   assert.equal(expected.length, 1);
   assert.equal(observed.length, 1);
 });
