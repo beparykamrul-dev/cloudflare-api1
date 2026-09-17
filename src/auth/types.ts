@@ -10,7 +10,8 @@ export type Permission =
   | "cloudflare:write"
   | "dns:read"
   | "dns:write"
-  | "audit:read";
+  | "audit:read"
+  | "monitoring:read";
 
 export interface Principal {
   id: string;
@@ -19,10 +20,10 @@ export interface Principal {
 }
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
-  super_admin: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write", "audit:read"],
-  admin: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write", "audit:read"],
-  engineer: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write"],
-  employee: ["inventory:read", "services:read", "deployments:read", "cloudflare:read", "dns:read"],
+  super_admin: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write", "audit:read", "monitoring:read"],
+  admin: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write", "audit:read", "monitoring:read"],
+  engineer: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "deployments:write", "cloudflare:read", "cloudflare:write", "dns:read", "dns:write", "monitoring:read"],
+  employee: ["inventory:read", "services:read", "deployments:read", "cloudflare:read", "dns:read", "monitoring:read"],
   user: ["inventory:read", "services:read"],
-  service: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "cloudflare:read"]
+  service: ["inventory:read", "inventory:sync", "services:read", "deployments:read", "cloudflare:read", "monitoring:read"]
 };
