@@ -1,7 +1,7 @@
 import { authorize } from "../auth/authorize.js";
 import { writeAudit } from "../audit/store.js";
 import type { RequestContext } from "../audit/context.js";
-import { createDnsRecord, deleteDnsRecord, getZone, listDnsRecords, listWorkers, listZones, updateDnsRecord } from "./resources.js";
+import { createDnsRecord, deleteDnsRecord, getWorker, getZone, listDnsRecords, listWorkers, listZones, updateDnsRecord } from "./resources.js";
 
 type Req = { method?: string; headers: Record<string, string | string[] | undefined> };
 type Response = { status: number; body: unknown };
@@ -73,5 +73,11 @@ export async function handleCloudflareResource(req: Req, pathname: string, body?
     }
   }
   if (pathname === "/api/cloudflare/workers" && req.method === "GET") return read ? { status: 200, body: await listWorkers() } : { status: 401, body: { error: "unauthorized" } };
+  const workerMatch = pathname.match(/^\/api\/cloudflare\/workers\/([^/]+)$/);
+  if (workerMatch && req.method === "GET") {
+    const scriptName = workerMatch[1];
+    if (!scriptName) return { status: 400, body: { error: "invalid_worker_name" } };
+    return read ? { status: 200, body: await getWorker(decodeURIComponent(scriptName)) } : { status: 401, body: { error: "unauthorized" } };
+  }
   return null;
 }
