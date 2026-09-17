@@ -7,6 +7,7 @@ import { loadApiTokens } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { handleDnsApi } from "./dns/api.js";
+import { handleDeploymentApi, handleDeploymentStatusCallback } from "./deployments/api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
@@ -30,7 +31,7 @@ function json(res: import("node:http").ServerResponse, status: number, body: unk
   res.end(JSON.stringify(body));
 }
 
-async function readJson(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
+async function readRaw(req: import("node:http").IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -39,8 +40,13 @@ async function readJson(req: import("node:http").IncomingMessage): Promise<Recor
     if (size > maxBodyBytes) throw new Error("request_body_too_large");
     chunks.push(buffer);
   }
-  if (!size) return {};
-  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJson(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readRaw(req);
+  if (!raw) return {};
+  const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_json_body");
   return parsed as Record<string, unknown>;
 }
@@ -77,6 +83,15 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname === "/api/panel" && req.method === "GET") {
       const result = handleControlPanelApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) });
+    }
+    if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") {
+      const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req));
+      return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) });
+    }
+    if (url.pathname.startsWith("/api/deployments")) {
+      const body = req.method === "POST" ? await readJson(req) : undefined;
+      const result = await handleDeploymentApi(req, url.pathname, body);
+      if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
     }
     if (url.pathname.startsWith("/api/cloudflare/")) {
       const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
