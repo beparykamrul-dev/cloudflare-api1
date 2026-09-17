@@ -25,7 +25,8 @@ export async function persistDeployment(record: DeploymentRecord): Promise<void>
       record.finishedAt ? new Date(record.finishedAt) : null,
       JSON.stringify({
         repository: record.repository,
-        error: record.error ?? null
+        error: record.error ?? null,
+        ...(record.rollbackOf ? { rollback_of: record.rollbackOf } : {})
       })
     ]
   );
