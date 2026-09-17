@@ -16,9 +16,17 @@ export async function handleMonitoringApi(req: { method?: string; headers: Recor
     return { status: 200, body: { alerts: await listAlertHistory(limit) } };
   }
   if (pathname === "/api/monitoring/summary") {
-    const alerts = await listActiveAlerts();
-    const current = alerts.length ? alerts : listAlerts();
-    return { status: 200, body: { status: current.some((a) => a.severity === "critical") ? "critical" : current.length ? "warning" : "ok", active_alerts: current.length, alerts: current } };
+    const persisted = await listActiveAlerts();
+    const current = persisted.length ? persisted : listAlerts();
+    return {
+      status: 200,
+      body: {
+        status: current.some((a) => a.severity === "critical") ? "critical" : current.length ? "warning" : "ok",
+        active_alerts: current,
+        active_alert_count: current.length,
+        alerts: current
+      }
+    };
   }
   return null;
 }
