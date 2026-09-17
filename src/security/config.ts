@@ -21,8 +21,11 @@ export function securityConfig(): SecurityConfig {
 
 export function assertProductionConfig(): void {
   if ((process.env.FTN_ENVIRONMENT ?? "development") !== "production") return;
-  const required = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"];
+  const required = ["DATABASE_URL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"];
   const missing = required.filter((name) => !process.env[name]);
   if (missing.length) throw new Error(`missing_production_config:${missing.join(",")}`);
   if (process.env.FTN_AUTH_ENABLED === "false") throw new Error("production_auth_cannot_be_disabled");
+  if (process.env.FTN_AUTH_ALLOW_ROLE_HEADERS === "true") throw new Error("production_role_headers_cannot_be_enabled");
+  if (process.env.FTN_RATE_LIMIT_MAX && Number(process.env.FTN_RATE_LIMIT_MAX) <= 0) throw new Error("invalid_rate_limit");
+  if (process.env.FTN_MAX_BODY_BYTES && Number(process.env.FTN_MAX_BODY_BYTES) <= 0) throw new Error("invalid_max_body_bytes");
 }
