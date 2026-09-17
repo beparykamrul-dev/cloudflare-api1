@@ -21,6 +21,10 @@ function boundedLimit(value: string | undefined): number {
   return Math.min(Math.max(Math.trunc(parsed), 1), 500);
 }
 
+function validRepository(repository: string): boolean {
+  return /^[-\w.]+\/[-\w.]+$/.test(repository);
+}
+
 async function serviceExists(serviceId: string): Promise<boolean> {
   const result = await getDb().query("SELECT 1 FROM ftn_services WHERE service_id=$1 LIMIT 1", [serviceId]);
   return result.rowCount === 1;
@@ -56,7 +60,7 @@ export async function handleDeploymentApi(
     const commitSha = text(body?.commitSha);
     const environment = text(body?.environment) as DeploymentEnvironment | undefined;
     if (!serviceId || !repository || !commitSha || !environment || !environments.has(environment)) return { status: 400, body: { error: "invalid_deployment_request" } };
-    if (!/^[-\w.]+\/[-\w.]+$/.test(repository)) return { status: 400, body: { error: "invalid_repository" } };
+    if (!validRepository(repository)) return { status: 400, body: { error: "invalid_repository" } };
     if (!/^[0-9a-f]{7,64}$/i.test(commitSha) && commitSha !== "HEAD") return { status: 400, body: { error: "invalid_commit_sha" } };
     if (!(await serviceExists(serviceId))) return { status: 404, body: { error: "service_not_registered" } };
     if (environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) return { status: 409, body: { error: "production_approval_required" } };
@@ -86,6 +90,62 @@ export async function handleDeploymentApi(
     const rows = await getDb().query("SELECT deployment_id, service_id, environment, commit_sha, version, actor_id, status, health_status, started_at, finished_at, metadata FROM ftn_deployments WHERE deployment_id=$1", [id]);
     if (!rows.rowCount) return { status: 404, body: { error: "deployment_not_found" } };
     return { status: 200, body: { deployment: rows.rows[0] } };
+  }
+
+  const rollback = pathname.match(/^\/api\/deployments\/([^/]+)\/rollback$/);
+  if (rollback && req.method === "POST") {
+    const principal = authorize(req, "deployments:write");
+    if (!principal) return { status: 401, body: { error: "unauthorized" } };
+    const targetId = rollback[1];
+    const result = await getDb().query(
+      `SELECT deployment_id, service_id, environment, commit_sha, status, metadata
+         FROM ftn_deployments WHERE deployment_id=$1`,
+      [targetId]
+    );
+    if (!result.rowCount) return { status: 404, body: { error: "deployment_not_found" } };
+    const target = result.rows[0] as {
+      deployment_id: string;
+      service_id: string;
+      environment: DeploymentEnvironment;
+      commit_sha: string;
+      status: string;
+      metadata?: Record<string, unknown>;
+    };
+    if (target.status !== "succeeded") return { status: 409, body: { error: "deployment_not_rollbackable" } };
+    if (!environments.has(target.environment)) return { status: 409, body: { error: "invalid_deployment_environment" } };
+    if (!(await serviceExists(target.service_id))) return { status: 404, body: { error: "service_not_registered" } };
+
+    const repository = typeof target.metadata?.repository === "string" ? target.metadata.repository : undefined;
+    if (!repository || !validRepository(repository)) return { status: 409, body: { error: "rollback_repository_unavailable" } };
+    if (!/^[0-9a-f]{7,64}$/i.test(target.commit_sha) && target.commit_sha !== "HEAD") return { status: 409, body: { error: "rollback_commit_unavailable" } };
+    if (target.environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) return { status: 409, body: { error: "production_approval_required" } };
+
+    const record = enqueueDeployment({
+      serviceId: target.service_id,
+      repository,
+      commitSha: target.commit_sha,
+      environment: target.environment,
+      requestedBy: principal.id,
+      rollbackOf: targetId
+    });
+    await persistDeployment(record);
+    await audit(context, principal.id, "deployment.rollback", "success", record.id, {
+      serviceId: target.service_id,
+      environment: target.environment,
+      rollbackOf: targetId,
+      commitSha: target.commit_sha
+    });
+    try {
+      await dispatchDeploymentWorkflow({ repository, ref: target.commit_sha, environment: target.environment, deploymentId: record.id });
+      const running = transitionDeployment(record.id, "running");
+      if (running) await persistDeployment(running);
+      return { status: 202, body: { deployment: running ?? record, rollback_of: targetId } };
+    } catch (error) {
+      const failed = transitionDeployment(record.id, "failed", error instanceof Error ? error.message : "workflow_dispatch_failed");
+      if (failed) await persistDeployment(failed);
+      await audit(context, principal.id, "deployment.rollback.dispatch", "failed", record.id, { rollbackOf: targetId, environment: target.environment });
+      return { status: 502, body: { error: "workflow_dispatch_failed", deployment: failed ?? record, rollback_of: targetId } };
+    }
   }
 
   const cancel = pathname.match(/^\/api\/deployments\/([^/]+)\/cancel$/);
