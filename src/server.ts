@@ -9,6 +9,8 @@ import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { handleDnsApi } from "./dns/api.js";
 import { handleDeploymentApi, handleDeploymentStatusCallback } from "./deployments/api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
+import { evaluateReadiness } from "./monitoring/alerts.js";
+import { handleMonitoringApi } from "./monitoring/api.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
 import { assertProductionConfig } from "./security/config.js";
@@ -20,7 +22,6 @@ const port = Number(process.env.PORT ?? 8080);
 const environment = process.env.FTN_ENVIRONMENT ?? "development";
 const cacheTtlMs = Number(process.env.INVENTORY_CACHE_TTL_MS ?? 60_000);
 const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1_048_576);
-
 if (authorizationEnabled() && process.env.DATABASE_URL) await loadApiTokens();
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown) {
@@ -29,27 +30,16 @@ function json(res: import("node:http").ServerResponse, status: number, body: unk
   for (const [name, value] of Object.entries(securityHeaders())) res.setHeader(name, value);
   res.end(JSON.stringify(body));
 }
-
 async function readRaw(req: import("node:http").IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > maxBodyBytes) throw new Error("request_body_too_large");
-    chunks.push(buffer);
-  }
+  const chunks: Buffer[] = []; let size = 0;
+  for await (const chunk of req) { const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); size += buffer.length; if (size > maxBodyBytes) throw new Error("request_body_too_large"); chunks.push(buffer); }
   return Buffer.concat(chunks).toString("utf8");
 }
-
 async function readJson(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
-  const raw = await readRaw(req);
-  if (!raw) return {};
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_json_body");
+  const raw = await readRaw(req); if (!raw) return {};
+  const parsed: unknown = JSON.parse(raw); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_json_body");
   return parsed as Record<string, unknown>;
 }
-
 async function inventory(force = false) {
   const cached = getInventorySnapshot();
   if (!force && cached && Date.now() - Date.parse(cached.observedAt) < cacheTtlMs) return cached;
@@ -58,12 +48,9 @@ async function inventory(force = false) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const requestStarted = process.hrtime.bigint();
-  res.once("finish", () => {
-    const durationSeconds = Number(process.hrtime.bigint() - requestStarted) / 1_000_000_000;
-    recordRequest(req.method ?? "UNKNOWN", url.pathname, res.statusCode, durationSeconds);
-  });
   const requestId = randomUUID();
+  const startedAt = process.hrtime.bigint();
+  res.once("finish", () => recordRequest(req.method ?? "GET", url.pathname, res.statusCode, Number(process.hrtime.bigint() - startedAt) / 1e9));
   for (const [name, value] of Object.entries(securityHeaders())) res.setHeader(name, value);
   res.setHeader("x-request-id", requestId);
   const limit = allowRequest(rateLimitKey(req));
@@ -77,45 +64,21 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health/ready") {
       const dbReady = process.env.DATABASE_URL ? await checkDb() : environment === "development";
       const cloudflareReady = Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
+      const changes = evaluateReadiness(dbReady, cloudflareReady);
+      for (const alert of changes) console.warn(JSON.stringify({ type: "monitoring_alert", ...alert, request_id: requestId }));
       const ready = dbReady && cloudflareReady;
       return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", checks: { database: dbReady, cloudflare: cloudflareReady }, request_id: requestId });
     }
     if (req.method === "GET" && url.pathname === "/metrics") { res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); return res.end(metricsText()); }
-    if (req.method === "GET" && url.pathname === "/api/auth/me") {
-      const principal = authorize(req, "services:read"); if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId });
-      return json(res, 200, { request_id: requestId, principal });
-    }
-    if (url.pathname === "/api/panel" && req.method === "GET") {
-      const result = handleControlPanelApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) });
-    }
-    if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") {
-      const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req));
-      return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) });
-    }
-    if (url.pathname.startsWith("/api/deployments")) {
-      const body = req.method === "POST" ? await readJson(req) : undefined;
-      const result = await handleDeploymentApi(req, url.pathname, body);
-      if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
-    }
-    if (url.pathname.startsWith("/api/cloudflare/")) {
-      const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
-      const result = await handleCloudflareResource(req, url.pathname, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
-    }
-    if (url.pathname.startsWith("/api/dns/")) {
-      const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
-      const result = await handleDnsApi(req, url, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
-    }
-    if (req.method === "GET" && url.pathname === "/api/inventory") {
-      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
-      const snapshot = await inventory(url.searchParams.get("refresh") === "true"); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items });
-    }
-    if (req.method === "GET" && url.pathname.startsWith("/api/inventory/")) {
-      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
-      const kind = url.pathname.split("/").pop(); const snapshot = await inventory(false);
-      const aliases: Record<string, string> = { accounts: "account", zones: "zone", workers: "worker", storage: "r2_bucket", ai: "ai_gateway", queues: "queue", kv: "kv_namespace", d1: "d1_database", vectorize: "vectorize_index", hyperdrive: "hyperdrive", containers: "container" };
-      const resourceType = aliases[kind ?? ""]; if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId });
-      const items = snapshot.items.filter((item) => item.resourceType === resourceType); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items });
-    }
+    if (req.method === "GET" && url.pathname === "/api/auth/me") { const principal = authorize(req, "services:read"); if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId }); return json(res, 200, { request_id: requestId, principal }); }
+    if (url.pathname === "/api/panel" && req.method === "GET") { const result = handleControlPanelApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
+    if (url.pathname.startsWith("/api/monitoring/")) { const result = handleMonitoringApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
+    if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") { const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req)); return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
+    if (url.pathname.startsWith("/api/deployments")) { const body = req.method === "POST" ? await readJson(req) : undefined; const result = await handleDeploymentApi(req, url.pathname, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
+    if (url.pathname.startsWith("/api/cloudflare/")) { const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined; const result = await handleCloudflareResource(req, url.pathname, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
+    if (url.pathname.startsWith("/api/dns/")) { const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined; const result = await handleDnsApi(req, url, body); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
+    if (req.method === "GET" && url.pathname === "/api/inventory") { if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }); const snapshot = await inventory(url.searchParams.get("refresh") === "true"); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items }); }
+    if (req.method === "GET" && url.pathname.startsWith("/api/inventory/")) { if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }); const kind = url.pathname.split("/").pop(); const snapshot = await inventory(false); const aliases: Record<string, string> = { accounts: "account", zones: "zone", workers: "worker", storage: "r2_bucket", ai: "ai_gateway", queues: "queue", kv: "kv_namespace", d1: "d1_database", vectorize: "vectorize_index", hyperdrive: "hyperdrive", containers: "container" }; const resourceType = aliases[kind ?? ""]; if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId }); const items = snapshot.items.filter((item) => item.resourceType === resourceType); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items }); }
     return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error"; console.error(JSON.stringify({ request_id: requestId, error: message }));
