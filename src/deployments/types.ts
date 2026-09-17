@@ -16,4 +16,5 @@ export interface DeploymentRecord extends DeploymentRequest {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  rollbackOf?: string;
 }
