@@ -10,7 +10,7 @@ import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { handleDnsApi } from "./dns/api.js";
 import { handleDeploymentApi, handleDeploymentStatusCallback } from "./deployments/api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
-import { evaluateReadiness } from "./monitoring/alerts.js";
+import { evaluateReadiness, hydrateAlerts } from "./monitoring/alerts.js";
 import { handleMonitoringApi } from "./monitoring/api.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
 import { handleControlPlaneDataApi } from "./control-panel/data-api.js";
@@ -22,6 +22,11 @@ import { checkDb } from "./db/client.js";
 const port = Number(process.env.PORT ?? 8080);
 assertProductionConfig();
 if (authorizationEnabled()) await loadApiTokens();
+try {
+  await hydrateAlerts();
+} catch (error) {
+  console.warn(JSON.stringify({ event: "alert_hydration_skipped", error: error instanceof Error ? error.message : "unknown_error" }));
+}
 const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1024 * 1024);
 const inventoryTtlMs = Number(process.env.FTN_INVENTORY_CACHE_TTL_MS ?? 30000);
 
