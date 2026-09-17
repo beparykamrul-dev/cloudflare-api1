@@ -6,13 +6,15 @@ import { authorize } from "./auth/authorize.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
+import { handleControlPanelApi } from "./control-panel/api.js";
+import { controlPanelHtml } from "./control-panel/ui.js";
 
 const port = Number(process.env.PORT ?? 8080);
 const environment = process.env.FTN_ENVIRONMENT ?? "development";
 const cacheTtlMs = Number(process.env.INVENTORY_CACHE_TTL_MS ?? 60_000);
 const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1_048_576);
 
-function json(res: import("node:http").ServerResponse, status: number, body: unknown, requestId: string) {
+function json(res: import("node:http").ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("x-content-type-options", "nosniff");
@@ -50,49 +52,53 @@ const server = createServer(async (req, res) => {
   res.setHeader("x-ratelimit-remaining", String(limit.remaining));
   if (!limit.allowed) {
     res.setHeader("retry-after", String(limit.retryAfter));
-    return json(res, 429, { error: "rate_limited", request_id: requestId, retry_after: limit.retryAfter }, requestId);
+    return json(res, 429, { error: "rate_limited", request_id: requestId, retry_after: limit.retryAfter });
   }
   try {
-    if (req.method === "GET" && url.pathname === "/health/live") return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId }, requestId);
-    if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { status: "ok", environment, service: "ftn-cloudflare-api", request_id: requestId }, requestId);
+    if (req.method === "GET" && url.pathname === "/") { res.statusCode = 302; res.setHeader("location", "/panel"); return res.end(); }
+    if (req.method === "GET" && url.pathname === "/panel") { res.statusCode = 200; res.setHeader("content-type", "text/html; charset=utf-8"); return res.end(controlPanelHtml()); }
+    if (req.method === "GET" && url.pathname === "/health/live") return json(res, 200, { status: "ok", service: "ftn-cloudflare-api", request_id: requestId });
+    if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { status: "ok", environment, service: "ftn-cloudflare-api", request_id: requestId });
     if (req.method === "GET" && url.pathname === "/health/ready") {
       const ready = Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
-      return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", request_id: requestId }, requestId);
+      return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", request_id: requestId });
     }
-    if (req.method === "GET" && url.pathname === "/metrics") {
-      res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); res.end(metricsText()); return;
-    }
+    if (req.method === "GET" && url.pathname === "/metrics") { res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); return res.end(metricsText()); }
     if (req.method === "GET" && url.pathname === "/api/auth/me") {
       const principal = authorize(req, "services:read");
-      if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId }, requestId);
-      return json(res, 200, { request_id: requestId, principal }, requestId);
+      if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId });
+      return json(res, 200, { request_id: requestId, principal });
+    }
+    if (url.pathname === "/api/panel" && req.method === "GET") {
+      const result = handleControlPanelApi(req, url.pathname);
+      if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) });
     }
     if (url.pathname.startsWith("/api/cloudflare/")) {
       const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined;
       const result = await handleCloudflareResource(req, url.pathname, body);
-      if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }, requestId);
+      if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
     }
     if (req.method === "GET" && url.pathname === "/api/inventory") {
-      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }, requestId);
+      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
       const snapshot = await inventory(url.searchParams.get("refresh") === "true");
-      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items }, requestId);
+      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items });
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/inventory/")) {
-      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }, requestId);
+      if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
       const kind = url.pathname.split("/").pop();
       const snapshot = await inventory(false);
       const aliases: Record<string, string> = { accounts: "account", zones: "zone", workers: "worker", storage: "r2_bucket", ai: "ai_gateway", queues: "queue", kv: "kv_namespace", d1: "d1_database", vectorize: "vectorize_index", hyperdrive: "hyperdrive", containers: "container" };
       const resourceType = aliases[kind ?? ""];
-      if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId }, requestId);
+      if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId });
       const items = snapshot.items.filter((item) => item.resourceType === resourceType);
-      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items }, requestId);
+      return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items });
     }
-    return json(res, 404, { error: "not_found", request_id: requestId }, requestId);
+    return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
     console.error(JSON.stringify({ request_id: requestId, error: message }));
     const status = message === "request_body_too_large" ? 413 : message === "invalid_json_body" ? 400 : 500;
-    return json(res, status, { error: status === 500 ? "internal_error" : message, request_id: requestId }, requestId);
+    return json(res, status, { error: status === 500 ? "internal_error" : message, request_id: requestId });
   }
 });
 
