@@ -7,6 +7,7 @@ import { authorize, authorizationEnabled } from "./auth/authorize.js";
 import { loadApiTokens } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
+import { normalizeCloudflareError } from "./cloudflare/validation.js";
 import { handleDnsApi } from "./dns/api.js";
 import { handleDeploymentApi, handleDeploymentStatusCallback } from "./deployments/api.js";
 import { metricsText, recordRequest } from "./monitoring/metrics.js";
@@ -105,8 +106,9 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error"; console.error(JSON.stringify({ request_id: requestId, error: message }));
-    const status = message === "request_body_too_large" ? 413 : message === "invalid_json_body" ? 400 : 500;
-    return json(res, status, { error: status === 500 ? "internal_error" : message, request_id: requestId });
+    const status = message === "request_body_too_large" ? 413 : message === "invalid_json_body" ? 400 : message.startsWith("cloudflare_") ? normalizeCloudflareError(error).status : 500;
+    const errorCode = status === 500 ? "internal_error" : message === "request_body_too_large" ? message : message === "invalid_json_body" ? message : message.startsWith("cloudflare_") ? normalizeCloudflareError(error).error : "request_failed";
+    return json(res, status, { error: errorCode, request_id: requestId });
   }
 });
 server.listen(port, "0.0.0.0", () => console.log(`ftn-cloudflare-api listening on ${port}`));
