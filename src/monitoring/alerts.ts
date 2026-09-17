@@ -1,4 +1,5 @@
 import { persistAlert } from "./alert-store.js";
+import { recordAlertTransition } from "./metrics.js";
 
 export type AlertSeverity = "warning" | "critical";
 export type AlertState = "firing" | "resolved";
@@ -15,10 +16,12 @@ export async function evaluateReadiness(database: boolean, cloudflare: boolean):
       const alert: Alert = { fingerprint: rule, rule, severity, state: "firing", message, updatedAt: now };
       active.set(rule, alert); changed.push(alert);
       await persistAlert(alert);
+      recordAlertTransition(alert.rule, alert.severity, alert.state);
     } else if (ok && existing) {
       const resolved = { ...existing, state: "resolved" as const, updatedAt: now };
       active.delete(rule); changed.push(resolved);
       await persistAlert(resolved);
+      recordAlertTransition(resolved.rule, resolved.severity, resolved.state);
     }
   }
   return changed;
