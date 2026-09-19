@@ -118,7 +118,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/services" || url.pathname === "/api/audit") { const result = await handleControlPlaneDataApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname.startsWith("/api/monitoring/")) { const result = await handleMonitoringApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") { const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req), context); return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
-    if (url.pathname.startsWith("/api/inventory/expected") || url.pathname === "/api/inventory/drift") {
+    if (url.pathname === "/api/inventory/sync" || url.pathname.startsWith("/api/inventory/expected") || url.pathname === "/api/inventory/drift") {
       const body = req.method === "POST" ? await readJson(req) : undefined;
       const result = await handleInventoryApi(req, url, body, context);
       if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
