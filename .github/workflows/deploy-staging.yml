@@ -2,9 +2,23 @@ name: Deploy Staging
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        type: choice
+        options: [development, staging, production]
+      deployment_id:
+        description: FTN deployment ID
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+concurrency:
+  group: ftn-${{ inputs.environment }}
+  cancel-in-progress: false
 
 jobs:
   build:
