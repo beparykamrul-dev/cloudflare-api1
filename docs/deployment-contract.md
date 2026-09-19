@@ -56,3 +56,12 @@ The target repository must be registered as an FTN service before a deployment c
 - Use a least-privilege GitHub token suitable for workflow dispatch.
 - Protect production environments with GitHub environment approvals as an additional control.
 - Do not put tokens, Authorization headers, or private keys in deployment metadata or audit logs.
+
+
+## Immutable release execution
+
+Each environment workflow builds and packages the exact checked-out commit. Before the signed status callback, the workflow executes the GitHub Environment secret `FTN_DEPLOY_COMMAND` on the runner. The command must deploy `$RELEASE_ARCHIVE` to the configured FTN target and must fail non-zero on deployment failure. It receives `$DEPLOYMENT_ID` and `$COMMIT_SHA` as environment variables.
+
+Configure `FTN_DEPLOY_COMMAND`, `FTN_DEPLOY_CALLBACK_URL`, `FTN_DEPLOY_CALLBACK_SECRET`, and `FTN_DEPLOY_HEALTH_URL` separately in the dev, staging, and production GitHub Environments. Keep credentials inside the environment/secret store; never commit them.
+
+The control plane records the deployment before dispatch and only accepts a signed callback for the registered service/repository/environment. A missing deployment command causes the workflow to fail instead of reporting a false successful deployment. No automatic destructive correction is performed.
