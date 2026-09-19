@@ -4,6 +4,8 @@ import { ROLE_PERMISSIONS, type Permission, type Principal, type Role } from "./
 
 type TokenRow = { id: string; principal_id: string; role: Role; permissions: unknown; token_hash: string; expires_at: Date | null };
 const cache = new Map<string, TokenRow>();
+const refreshIntervalMs = 30_000;
+let refreshTimer: NodeJS.Timeout | undefined;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
@@ -23,6 +25,14 @@ export async function loadApiTokens(): Promise<void> {
     "SELECT id, principal_id, role, permissions, token_hash, expires_at FROM ftn_api_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())"
   );
   for (const row of result.rows) if (row.role in ROLE_PERMISSIONS) cache.set(row.token_hash, row);
+}
+
+export function startApiTokenRefresh(): void {
+  if (refreshTimer) return;
+  refreshTimer = setInterval(() => {
+    void loadApiTokens().catch(() => undefined);
+  }, refreshIntervalMs);
+  refreshTimer.unref();
 }
 
 export function principalFromApiToken(token: string): Principal | null {
