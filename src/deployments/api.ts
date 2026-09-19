@@ -26,9 +26,14 @@ function validRepository(repository: string): boolean {
   return /^[-\w.]+\/[-\w.]+$/.test(repository);
 }
 
-async function serviceExists(serviceId: string): Promise<boolean> {
-  const result = await getDb().query("SELECT 1 FROM ftn_services WHERE service_id=$1 LIMIT 1", [serviceId]);
-  return result.rowCount === 1;
+async function serviceRepository(serviceId: string): Promise<string | null> {
+  const result = await getDb().query(
+    "SELECT repository FROM ftn_services WHERE service_id=$1 AND status='active' LIMIT 1",
+    [serviceId]
+  );
+  if (result.rowCount !== 1) return null;
+  const repository = result.rows[0]?.repository;
+  return typeof repository === "string" && repository.trim() ? repository.trim() : null;
 }
 
 async function audit(context: RequestContext | undefined, actorId: string, action: string, result: string, deploymentId: string, metadata: Record<string, unknown> = {}): Promise<void> {
@@ -63,7 +68,9 @@ export async function handleDeploymentApi(
     if (!serviceId || !repository || !commitSha || !environment || !environments.has(environment)) return { status: 400, body: { error: "invalid_deployment_request" } };
     if (!validRepository(repository)) return { status: 400, body: { error: "invalid_repository" } };
     if (!/^[0-9a-f]{7,64}$/i.test(commitSha) && commitSha !== "HEAD") return { status: 400, body: { error: "invalid_commit_sha" } };
-    if (!(await serviceExists(serviceId))) return { status: 404, body: { error: "service_not_registered" } };
+    const registeredRepository = await serviceRepository(serviceId);
+    if (!registeredRepository) return { status: 404, body: { error: "service_not_registered" } };
+    if (!validRepository(registeredRepository) || registeredRepository !== repository) return { status: 409, body: { error: "repository_service_mismatch" } };
     if (environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) return { status: 409, body: { error: "production_approval_required" } };
 
     const record = enqueueDeployment({ serviceId, repository, commitSha, environment, requestedBy: principal.id });
@@ -114,10 +121,12 @@ export async function handleDeploymentApi(
     };
     if (target.status !== "succeeded") return { status: 409, body: { error: "deployment_not_rollbackable" } };
     if (!environments.has(target.environment)) return { status: 409, body: { error: "invalid_deployment_environment" } };
-    if (!(await serviceExists(target.service_id))) return { status: 404, body: { error: "service_not_registered" } };
+    const registeredRepository = await serviceRepository(target.service_id);
+    if (!registeredRepository) return { status: 404, body: { error: "service_not_registered" } };
 
     const repository = typeof target.metadata?.repository === "string" ? target.metadata.repository : undefined;
     if (!repository || !validRepository(repository)) return { status: 409, body: { error: "rollback_repository_unavailable" } };
+    if (registeredRepository !== repository) return { status: 409, body: { error: "rollback_repository_mismatch" } };
     if (!/^[0-9a-f]{7,64}$/i.test(target.commit_sha) && target.commit_sha !== "HEAD") return { status: 409, body: { error: "rollback_commit_unavailable" } };
     if (target.environment === "production" && process.env.FTN_PRODUCTION_APPROVAL_REQUIRED === "true" && body?.approved !== true) return { status: 409, body: { error: "production_approval_required" } };
 
@@ -192,7 +201,7 @@ export async function handleDeploymentStatusCallback(
     [deploymentId]
   );
   if (!result.rowCount) return { status: 404, body: { error: "deployment_not_found" } };
-  const current = result.rows[0] as { service_id?: string; environment?: string; commit_sha?: string; status?: string; health_status?: string; metadata?: Record<string, unknown>; started_at?: string | Date | null };
+  const current = result.rows[0] as { service_id?: string; environment?: string; commit_sha?: string; status?: string; health_status?: string; version?: string; metadata?: Record<string, unknown>; started_at?: string | Date | null };
   const metadata = current.metadata ?? {};
   const repository = typeof metadata.repository === "string" ? metadata.repository : undefined;
   if (!expectedRepository || !expectedServiceId || !expectedEnvironment) return { status: 400, body: { error: "callback_identity_required" } };
