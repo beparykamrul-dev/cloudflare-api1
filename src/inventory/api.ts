@@ -2,7 +2,8 @@ import type { IncomingHttpHeaders } from "node:http";
 import { authorize } from "../auth/authorize.js";
 import { detectDrift } from "./drift.js";
 import { expectedToInventoryItem, listExpectedResources, upsertExpectedResource, archiveExpectedResource } from "./expected.js";
-import { getInventorySnapshot } from "./cache.js";
+import { getInventorySnapshot, setInventorySnapshot, persistInventorySnapshot } from "./cache.js";
+import { discoverInventory } from "./discovery.js";
 import { writeAudit } from "../audit/store.js";
 import type { RequestContext } from "../audit/context.js";
 
@@ -13,6 +14,17 @@ export async function handleInventoryApi(
   context?: RequestContext
 ): Promise<{ status: number; body: unknown } | null> {
   if (!url.pathname.startsWith("/api/inventory")) return null;
+
+  if (req.method === "POST" && url.pathname === "/api/inventory/sync") {
+    const principal = authorize(req, "inventory:sync");
+    if (!principal) return { status: 401, body: { error: "unauthorized" } };
+    const observedAt = new Date().toISOString();
+    const items = await discoverInventory();
+    const snapshot = setInventorySnapshot({ observedAt, items });
+    await persistInventorySnapshot(snapshot);
+    if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "success", resource: "inventory", metadata: { count: items.length, observedAt } });
+    return { status: 200, body: { observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items } };
+  }
 
   if (req.method === "GET" && url.pathname === "/api/inventory/expected") {
     if (!authorize(req, "inventory:read")) return { status: 401, body: { error: "unauthorized" } };
@@ -34,7 +46,8 @@ export async function handleInventoryApi(
     }
     const metadata = body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata as Record<string, unknown> : {};
     const item = await upsertExpectedResource({ resourceType, resourceId, scope, environment, name, source, metadata });
-    if (context) await writeAudit({ requestId: context.requestId, actorId: "api", action: "inventory.expected.upsert", result: "success", resource: `inventory:${item.resourceKey}`, metadata: { resourceType, resourceId, scope, environment } });
+    const principal = authorize(req, "inventory:sync");
+    if (context && principal) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.expected.upsert", result: "success", resource: `inventory:${item.resourceKey}`, metadata: { resourceType, resourceId, scope, environment } });
     return { status: 200, body: { item } };
   }
 
@@ -43,7 +56,8 @@ export async function handleInventoryApi(
     const key = decodeURIComponent(url.pathname.slice("/api/inventory/expected/".length));
     if (!key || key.length > 300) return { status: 400, body: { error: "invalid_resource_key" } };
     const archived = await archiveExpectedResource(key);
-    if (archived && context) await writeAudit({ requestId: context.requestId, actorId: "api", action: "inventory.expected.archive", result: "success", resource: `inventory:${key}`, metadata: {} });
+    const principal = authorize(req, "inventory:sync");
+    if (archived && context && principal) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.expected.archive", result: "success", resource: `inventory:${key}`, metadata: {} });
     return { status: archived ? 200 : 404, body: archived ? { status: "archived", resource_key: key } : { error: "expected_resource_not_found" } };
   }
 
