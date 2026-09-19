@@ -80,7 +80,7 @@ async function findDispatchedWorkflowRun(input: {
     const timeout = setTimeout(() => controller.abort(), Math.min(4_000, Math.max(1_000, deadline - Date.now())));
     try {
       const params = new URLSearchParams({ event: "workflow_dispatch", per_page: "20" });
-      if (input.ref !== "HEAD") params.set("branch", input.ref);
+      if (input.ref !== "HEAD" && !/^[0-9a-f]{7,64}$/i.test(input.ref)) params.set("branch", input.ref);
       const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/actions/workflows/${encodeURIComponent(input.workflow)}/runs?${params.toString()}`, {
         headers: { Authorization: `Bearer ${input.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
         signal: controller.signal
