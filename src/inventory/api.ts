@@ -3,11 +3,14 @@ import { authorize } from "../auth/authorize.js";
 import { detectDrift } from "./drift.js";
 import { expectedToInventoryItem, listExpectedResources, upsertExpectedResource, archiveExpectedResource } from "./expected.js";
 import { getInventorySnapshot } from "./cache.js";
+import { writeAudit } from "../audit/store.js";
+import type { RequestContext } from "../audit/context.js";
 
 export async function handleInventoryApi(
   req: { method?: string; headers: IncomingHttpHeaders },
   url: URL,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  context?: RequestContext
 ): Promise<{ status: number; body: unknown } | null> {
   if (!url.pathname.startsWith("/api/inventory")) return null;
 
@@ -30,7 +33,9 @@ export async function handleInventoryApi(
       return { status: 400, body: { error: "invalid_expected_resource" } };
     }
     const metadata = body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata as Record<string, unknown> : {};
-    return { status: 200, body: { item: await upsertExpectedResource({ resourceType, resourceId, scope, environment, name, source, metadata }) } };
+    const item = await upsertExpectedResource({ resourceType, resourceId, scope, environment, name, source, metadata });
+    if (context) await writeAudit({ requestId: context.requestId, actorId: "api", action: "inventory.expected.upsert", result: "success", resource: `inventory:${item.resourceKey}`, metadata: { resourceType, resourceId, scope, environment } });
+    return { status: 200, body: { item } };
   }
 
   if (req.method === "DELETE" && url.pathname.startsWith("/api/inventory/expected/")) {
@@ -38,6 +43,7 @@ export async function handleInventoryApi(
     const key = decodeURIComponent(url.pathname.slice("/api/inventory/expected/".length));
     if (!key || key.length > 300) return { status: 400, body: { error: "invalid_resource_key" } };
     const archived = await archiveExpectedResource(key);
+    if (archived && context) await writeAudit({ requestId: context.requestId, actorId: "api", action: "inventory.expected.archive", result: "success", resource: `inventory:${key}`, metadata: {} });
     return { status: archived ? 200 : 404, body: archived ? { status: "archived", resource_key: key } : { error: "expected_resource_not_found" } };
   }
 
