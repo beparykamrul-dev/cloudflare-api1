@@ -146,3 +146,33 @@ npm run validate:config
 The security workflow additionally runs Gitleaks and `npm audit --audit-level=high`.
 
 Repository-level CI/build verification does not imply that a production FTN host, PostgreSQL instance, Cloudflare account, GitHub environment, DNS provider or external deployment target is live. Those require the corresponding runtime credentials and infrastructure.
+
+
+## One-command live start
+
+After cloning and installing dependencies:
+
+```bash
+cp .env.example .env
+# Fill DATABASE_URL, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and auth/deployment secrets.
+npm install
+npm run live
+```
+
+`npm run live` performs configuration validation, TypeScript production build, backward-compatible PostgreSQL migrations, and starts the API on `0.0.0.0:PORT`.
+
+Health checks:
+- `GET /health` — process health
+- `GET /health/live` — liveness
+- `GET /health/ready` — database + Cloudflare readiness
+- `GET /metrics` — Prometheus metrics
+- `GET /panel` — web control panel
+
+Production requirements:
+- Node.js 22+
+- PostgreSQL
+- Cloudflare account/token
+- authentication enabled
+- GitHub Actions credentials only when deployment dispatch is used
+
+The application never performs destructive drift correction automatically. Keep production secrets outside Git and outside telemetry/audit metadata.
