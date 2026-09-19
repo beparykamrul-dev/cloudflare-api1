@@ -4,7 +4,7 @@ import { writeAudit } from "../audit/store.js";
 import type { RequestContext } from "../audit/context.js";
 import { getDb } from "../db/client.js";
 import { enqueueDeployment, getDeployment, listDeployments, syncDeploymentCallback, transitionDeployment } from "./queue.js";
-import { dispatchDeploymentWorkflow, verifyGitHubWebhookSignature } from "./github-actions.js";
+import { dispatchDeploymentWorkflow, cancelDeploymentWorkflow, verifyGitHubWebhookSignature } from "./github-actions.js";
 import { persistDeployment, listPersistedDeployments, acquireDeploymentLease, releaseDeploymentLease, updateDeploymentMetadata } from "./store.js";
 import { recordDeployment } from "../monitoring/metrics.js";
 import type { DeploymentEnvironment, DeploymentStatus } from "./types.js";
@@ -175,15 +175,53 @@ export async function handleDeploymentApi(
   if (cancel && req.method === "POST") {
     const principal = authorize(req, "deployments:write");
     if (!principal) return { status: 401, body: { error: "unauthorized" } };
-    const record = getDeployment(cancel[1]);
-    if (!record) return { status: 404, body: { error: "deployment_not_found" } };
-    if (!["queued", "running"].includes(record.status)) return { status: 409, body: { error: "deployment_not_cancellable" } };
-    const result = transitionDeployment(record.id, "cancelled");
-    if (result) {
-      await releaseDeploymentLease(result.id);
-      await persistDeployment(result);
-      await audit(context, principal.id, "deployment.cancelled", "success", result.id, { serviceId: result.serviceId, environment: result.environment });
+    const id = cancel[1];
+    const live = getDeployment(id);
+    const dbResult = live ? null : await getDb().query(
+      `SELECT deployment_id, service_id, environment, status, metadata
+         FROM ftn_deployments WHERE deployment_id=$1 LIMIT 1`,
+      [id]
+    );
+    const row = live ?? (dbResult?.rows[0] as { deployment_id: string; service_id: string; environment: DeploymentEnvironment; status: DeploymentStatus; metadata?: Record<string, unknown> } | undefined);
+    if (!row) return { status: 404, body: { error: "deployment_not_found" } };
+    if (!["queued", "running"].includes(row.status)) return { status: 409, body: { error: "deployment_not_cancellable" } };
+
+    const metadata = row.metadata ?? {};
+    const repository = typeof metadata.repository === "string" ? metadata.repository : undefined;
+    const runId = typeof metadata.github_run_id === "number" ? metadata.github_run_id : Number(metadata.github_run_id);
+    if (repository && Number.isInteger(runId) && runId > 0) {
+      try {
+        await cancelDeploymentWorkflow({ repository, runId });
+      } catch (error) {
+        await audit(context, principal.id, "deployment.cancel", "failed", id, {
+          serviceId: row.service_id,
+          environment: row.environment,
+          reason: error instanceof Error ? error.message : "github_cancel_failed"
+        });
+        return { status: 502, body: { error: "github_workflow_cancel_failed" } };
+      }
     }
+
+    let result: unknown = live;
+    if (live) {
+      const updated = transitionDeployment(id, "cancelled");
+      if (updated) {
+        await releaseDeploymentLease(updated.id);
+        await persistDeployment(updated);
+      }
+      result = updated;
+    } else {
+      const updated = await getDb().query(
+        `UPDATE ftn_deployments
+            SET status='cancelled', finished_at=COALESCE(finished_at, now())
+          WHERE deployment_id=$1 AND status IN ('queued','running')
+          RETURNING deployment_id, service_id, environment, status, finished_at`,
+        [id]
+      );
+      await releaseDeploymentLease(id);
+      result = updated.rows[0] ?? null;
+    }
+    await audit(context, principal.id, "deployment.cancelled", "success", id, { serviceId: row.service_id, environment: row.environment, githubRunId: Number.isInteger(runId) ? runId : undefined });
     return { status: 200, body: { deployment: result } };
   }
 
