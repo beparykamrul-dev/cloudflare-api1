@@ -3,11 +3,6 @@ name: Deploy Staging
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: Deployment environment
-        required: true
-        type: choice
-        options: [development, staging, production]
       deployment_id:
         description: FTN deployment ID
         required: true
@@ -17,7 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ftn-${{ inputs.environment }}
+  group: ftn-staging-${{ inputs.deployment_id }}
+  cancel-in-progress: false
   cancel-in-progress: false
 
 jobs:
@@ -40,3 +36,51 @@ jobs:
         with:
           name: ftn-cloudflare-api-staging-${{ github.sha }}
           path: ftn-cloudflare-api-${{ github.sha }}.tar.gz
+
+  callback:
+    if: always()
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Verify deployed health
+        id: health
+        if: needs.build.result == 'success'
+        continue-on-error: true
+        env:
+          FTN_DEPLOY_HEALTH_URL: ${{ secrets.FTN_DEPLOY_HEALTH_URL }}
+        run: |
+          set -eu
+          test -n "$FTN_DEPLOY_HEALTH_URL"
+          curl --fail --silent --show-error --max-time 15 "${FTN_DEPLOY_HEALTH_URL%/}/health/ready" >/dev/null
+      - name: Send signed deployment callback
+        if: always()
+        env:
+          FTN_DEPLOY_CALLBACK_URL: ${{ secrets.FTN_DEPLOY_CALLBACK_URL }}
+          FTN_DEPLOY_CALLBACK_SECRET: ${{ secrets.FTN_DEPLOY_CALLBACK_SECRET }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          REPOSITORY: ${{ github.repository }}
+          SERVICE_ID: ftn-cloudflare-api
+          ENVIRONMENT: staging
+          COMMIT_SHA: ${{ github.sha }}
+          JOB_RESULT: ${{ needs.build.result }}
+          HEALTH_OUTCOME: ${{ steps.health.outcome }}
+        run: |
+          set -eu
+          test -n "$FTN_DEPLOY_CALLBACK_URL"
+          test -n "$FTN_DEPLOY_CALLBACK_SECRET"
+          status="failed"
+          health_status="unknown"
+          if [ "$JOB_RESULT" = "success" ] && [ "$HEALTH_OUTCOME" = "success" ]; then
+            status="succeeded"
+            health_status="healthy"
+          elif [ "$JOB_RESULT" = "success" ]; then
+            health_status="unhealthy"
+          fi
+          payload="$(jq -cn --arg deployment_id "$DEPLOYMENT_ID" --arg repository "$REPOSITORY" --arg service_id "$SERVICE_ID" --arg environment "$ENVIRONMENT" --arg status "$status" --arg health_status "$health_status" --arg version "$COMMIT_SHA" '{deployment_id:$deployment_id,repository:$repository,service_id:$service_id,environment:$environment,status:$status,health_status:$health_status,version:$version}')"
+          signature="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$FTN_DEPLOY_CALLBACK_SECRET" -hex | awk '{print $2}')"
+          curl --fail --silent --show-error --max-time 15 \
+            -X POST "$FTN_DEPLOY_CALLBACK_URL" \
+            -H 'content-type: application/json' \
+            -H "x-ftn-signature-256: sha256=$signature" \
+            --data-binary "$payload"
