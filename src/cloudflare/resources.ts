@@ -59,9 +59,22 @@ type ApiEnvelope<T> = { success: boolean; result?: T; errors?: unknown[]; messag
 
 async function accountList(path: string): Promise<unknown> {
   const token = requireEnv("CLOUDFLARE_API_TOKEN");
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId()}${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
-  });
+  const timeoutMs = Math.max(1_000, Number(process.env.CLOUDFLARE_API_TIMEOUT_MS ?? 15_000));
+  if (!Number.isFinite(timeoutMs)) throw new Error("invalid_cloudflare_api_timeout_ms");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId()}${path}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "FTN-Cloudflare-Control-Plane" },
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("cloudflare_api_timeout");
+    throw new Error("cloudflare_api_unreachable");
+  } finally {
+    clearTimeout(timeout);
+  }
   const body = await response.json() as ApiEnvelope<unknown>;
   if (!response.ok || !body.success) throw new Error(`cloudflare_api_${response.status}`);
   return body;
