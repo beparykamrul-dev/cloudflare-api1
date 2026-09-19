@@ -186,8 +186,10 @@ export async function handleDeploymentApi(
     if (!row) return { status: 404, body: { error: "deployment_not_found" } };
     if (!["queued", "running"].includes(row.status)) return { status: 409, body: { error: "deployment_not_cancellable" } };
 
-    const metadata = row.metadata ?? {};
-    const repository = typeof metadata.repository === "string" ? metadata.repository : undefined;
+    const metadata = "metadata" in row ? (row.metadata ?? {}) : {};
+    const repository = "repository" in row && typeof row.repository === "string"
+      ? row.repository
+      : (typeof metadata.repository === "string" ? metadata.repository : undefined);
     const runId = typeof metadata.github_run_id === "number" ? metadata.github_run_id : Number(metadata.github_run_id);
     if (repository && Number.isInteger(runId) && runId > 0) {
       try {
