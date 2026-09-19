@@ -168,6 +168,11 @@ Health checks:
 - `GET /metrics` — Prometheus metrics
 - `GET /panel` — web control panel
 
+GitHub deployment environment secrets:
+- `FTN_DEPLOY_CALLBACK_URL` — HTTPS endpoint for `/api/webhooks/deployment-status`
+- `FTN_DEPLOY_CALLBACK_SECRET` — shared HMAC secret; never commit it
+- `FTN_DEPLOY_HEALTH_URL` — base URL of the deployed service; `/health/ready` is checked before success callback
+
 Production requirements:
 - Node.js 22+
 - PostgreSQL
