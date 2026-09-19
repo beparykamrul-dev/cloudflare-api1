@@ -62,3 +62,11 @@ export async function acquireDeploymentLease(serviceId: string, environment: str
 export async function releaseDeploymentLease(deploymentId: string): Promise<void> {
   await getDb().query("DELETE FROM ftn_deployment_locks WHERE deployment_id=$1", [deploymentId]);
 }
+
+
+export async function updateDeploymentMetadata(deploymentId: string, metadata: Record<string, unknown>): Promise<void> {
+  await getDb().query(
+    "UPDATE ftn_deployments SET metadata = metadata || $2::jsonb WHERE deployment_id=$1",
+    [deploymentId, JSON.stringify(metadata)]
+  );
+}
