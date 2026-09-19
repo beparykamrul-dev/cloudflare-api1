@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { discoverInventory } from "./inventory/discovery.js";
-import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
+import { getInventorySnapshot, setInventorySnapshot, loadInventorySnapshot, persistInventorySnapshot } from "./inventory/cache.js";
 import type { InventoryItem } from "./inventory/types.js";
 import { authorize, authorizationEnabled } from "./auth/authorize.js";
 import { loadApiTokens, startApiTokenRefresh } from "./auth/token-store.js";
@@ -35,6 +35,7 @@ try {
 }
 const maxBodyBytes = runtimeConfig.maxBodyBytes;
 const inventoryTtlMs = Math.max(1_000, Number(process.env.FTN_INVENTORY_CACHE_TTL_MS ?? 30000));
+await loadInventorySnapshot();
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
@@ -77,7 +78,9 @@ async function inventory(refresh = false): Promise<{ observedAt: string; items: 
   const cached = getInventorySnapshot();
   if (!refresh && cached && Date.now() - new Date(cached.observedAt).getTime() < inventoryTtlMs) return cached;
   const snapshot = await discoverInventory();
-  return setInventorySnapshot(snapshot);
+  const value = setInventorySnapshot(snapshot);
+  await persistInventorySnapshot(value);
+  return value;
 }
 
 const server = createServer(async (req, res) => {
