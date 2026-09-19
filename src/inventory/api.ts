@@ -18,7 +18,15 @@ export async function handleInventoryApi(
   if (req.method === "POST" && url.pathname === "/api/inventory/sync") {
     const principal = authorize(req, "inventory:sync");
     if (!principal) return { status: 401, body: { error: "unauthorized" } };
-    const items = await discoverInventory();
+    let items;
+    try {
+      items = await discoverInventory();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "inventory_discovery_failed";
+      const status = message === "cloudflare_auth_failed" || message === "cloudflare_forbidden" ? 502 : 503;
+      if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "failed", resource: "inventory", metadata: { error: message } });
+      return { status, body: { error: message === "cloudflare_auth_failed" || message === "cloudflare_forbidden" ? "inventory_provider_unauthorized" : "inventory_provider_unavailable" } };
+    }
     const snapshot = setInventorySnapshot(items);
     await persistInventorySnapshot(snapshot);
     if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "success", resource: "inventory", metadata: { count: items.length, observedAt: snapshot.observedAt } });
