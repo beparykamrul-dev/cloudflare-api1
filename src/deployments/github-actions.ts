@@ -16,11 +16,23 @@ export async function dispatchDeploymentWorkflow(input: {
   const workflow = process.env.GITHUB_DEPLOY_WORKFLOW ?? "deploy.yml";
   const [owner, repo] = input.repository.split("/");
   if (!owner || !repo || input.repository.split("/").length !== 2) throw new Error("invalid_repository");
-  const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+  const timeoutMs = Math.max(1_000, Number(process.env.GITHUB_ACTIONS_TIMEOUT_MS ?? 15_000));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: input.ref, inputs: { environment: input.environment, deployment_id: input.deploymentId } })
+    body: JSON.stringify({ ref: input.ref, inputs: { environment: input.environment, deployment_id: input.deploymentId } }),
+    signal: controller.signal
   });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("github_workflow_dispatch_timeout");
+    throw new Error("github_workflow_dispatch_unreachable");
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) throw new Error(`github_workflow_dispatch_failed:${response.status}`);
 }
 
