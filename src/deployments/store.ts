@@ -59,6 +59,15 @@ export async function acquireDeploymentLease(serviceId: string, environment: str
   return result.rowCount === 1;
 }
 
+export async function renewDeploymentLease(deploymentId: string, leaseSeconds = 900): Promise<boolean> {
+  const seconds = Math.min(Math.max(Math.trunc(leaseSeconds), 30), 86400);
+  const result = await getDb().query(
+    "UPDATE ftn_deployment_locks SET lease_until=now() + ($2 * interval '1 second') WHERE deployment_id=$1 AND lease_until > now() RETURNING deployment_id",
+    [deploymentId, seconds]
+  );
+  return result.rowCount === 1;
+}
+
 export async function releaseDeploymentLease(deploymentId: string): Promise<void> {
   await getDb().query("DELETE FROM ftn_deployment_locks WHERE deployment_id=$1", [deploymentId]);
 }
