@@ -118,7 +118,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") { const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req), context); return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname.startsWith("/api/inventory/expected") || url.pathname === "/api/inventory/drift") {
       const body = req.method === "POST" ? await readJson(req) : undefined;
-      const result = await handleInventoryApi(req, url, body);
+      const result = await handleInventoryApi(req, url, body, context);
       if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
     }
     if (url.pathname.startsWith("/api/deployments")) { const body = req.method === "POST" ? await readJson(req) : undefined; const result = await handleDeploymentApi(req, url.pathname, body, context, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
