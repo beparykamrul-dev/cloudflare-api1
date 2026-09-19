@@ -109,3 +109,36 @@ export function verifyGitHubWebhookSignature(payload: string | Buffer, signature
   if (!/^[a-f0-9]{64}$/i.test(supplied)) return false;
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(supplied, "hex"));
 }
+
+
+export async function cancelDeploymentWorkflow(input: { repository: string; runId: number }): Promise<void> {
+  const token = required("GITHUB_ACTIONS_TOKEN");
+  const [owner, repo] = input.repository.split("/");
+  if (!owner || !repo || input.repository.split("/").length !== 2 || !Number.isInteger(input.runId) || input.runId <= 0) {
+    throw new Error("invalid_workflow_run");
+  }
+  const timeoutMs = positiveTimeout("github_actions_timeout_ms", process.env.GITHUB_ACTIONS_TIMEOUT_MS, 15_000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${input.runId}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        },
+        signal: controller.signal
+      }
+    );
+    if (!response.ok && response.status !== 409) throw new Error(`github_workflow_cancel_failed:${response.status}`);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("github_workflow_cancel_timeout");
+    if (error instanceof Error && error.message.startsWith("github_workflow_cancel_failed:")) throw error;
+    throw new Error("github_workflow_cancel_unreachable");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
