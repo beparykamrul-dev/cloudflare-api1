@@ -21,7 +21,7 @@ export async function handleInventoryApi(
     const items = await discoverInventory();
     const snapshot = setInventorySnapshot(items);
     await persistInventorySnapshot(snapshot);
-    if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "success", resource: "inventory", metadata: { count: items.length, observedAt } });
+    if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "success", resource: "inventory", metadata: { count: items.length, observedAt: snapshot.observedAt } });
     return { status: 200, body: { observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items } };
   }
 
