@@ -5,7 +5,7 @@ import type { RequestContext } from "../audit/context.js";
 import { getDb } from "../db/client.js";
 import { enqueueDeployment, getDeployment, listDeployments, syncDeploymentCallback, transitionDeployment } from "./queue.js";
 import { dispatchDeploymentWorkflow, verifyGitHubWebhookSignature } from "./github-actions.js";
-import { persistDeployment, listPersistedDeployments } from "./store.js";
+import { persistDeployment, listPersistedDeployments, acquireDeploymentLease, releaseDeploymentLease } from "./store.js";
 import { recordDeployment } from "../monitoring/metrics.js";
 import type { DeploymentEnvironment, DeploymentStatus } from "./types.js";
 
@@ -77,11 +77,20 @@ export async function handleDeploymentApi(
     await persistDeployment(record);
     await audit(context, principal.id, "deployment.created", "success", record.id, { serviceId, repository, commitSha, environment });
     try {
+      const lease = await acquireDeploymentLease(serviceId, environment, record.id, Number(process.env.FTN_DEPLOYMENT_LEASE_SECONDS ?? 900));
+      if (!lease) {
+        const blocked = transitionDeployment(record.id, "failed", "deployment_locked");
+        if (blocked) await persistDeployment(blocked);
+        await audit(context, principal.id, "deployment.lock", "failed", record.id, { serviceId, environment });
+        return { status: 409, body: { error: "deployment_locked", deployment: blocked ?? record } };
+      }
       await dispatchDeploymentWorkflow({ repository, ref: commitSha, environment, deploymentId: record.id });
       const running = transitionDeployment(record.id, "running");
       if (running) await persistDeployment(running);
       return { status: 202, body: { deployment: running ?? record } };
     } catch (error) {
+      await releaseDeploymentLease(record.id);
+      await releaseDeploymentLease(record.id);
       const failed = transitionDeployment(record.id, "failed", error instanceof Error ? error.message : "workflow_dispatch_failed");
       if (failed) await persistDeployment(failed);
       await audit(context, principal.id, "deployment.dispatch", "failed", record.id, { serviceId, environment });
@@ -146,6 +155,8 @@ export async function handleDeploymentApi(
       commitSha: target.commit_sha
     });
     try {
+      const lease = await acquireDeploymentLease(target.service_id, target.environment, record.id, Number(process.env.FTN_DEPLOYMENT_LEASE_SECONDS ?? 900));
+      if (!lease) return { status: 409, body: { error: "deployment_locked", deployment: record, rollback_of: targetId } };
       await dispatchDeploymentWorkflow({ repository, ref: target.commit_sha, environment: target.environment, deploymentId: record.id });
       const running = transitionDeployment(record.id, "running");
       if (running) await persistDeployment(running);
@@ -167,6 +178,7 @@ export async function handleDeploymentApi(
     if (!["queued", "running"].includes(record.status)) return { status: 409, body: { error: "deployment_not_cancellable" } };
     const result = transitionDeployment(record.id, "cancelled");
     if (result) {
+      await releaseDeploymentLease(result.id);
       await persistDeployment(result);
       await audit(context, principal.id, "deployment.cancelled", "success", result.id, { serviceId: result.serviceId, environment: result.environment });
     }
@@ -238,6 +250,7 @@ export async function handleDeploymentStatusCallback(
   );
   const row = updated.rows[0] as { service_id?: string; environment?: string; status?: string };
 
+  await releaseDeploymentLease(deploymentId);
   const local = syncDeploymentCallback(deploymentId, status, { error: errorMessage ? "workflow_reported_error" : undefined });
   if (local && local.status === status) {
     const startedMs = current.started_at ? new Date(current.started_at).getTime() : undefined;
