@@ -107,6 +107,8 @@ const server = createServer(async (req, res) => {
       return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", checks: { database: dbReady, cloudflare: cloudflareReady }, request_id: requestId });
     }
     if (req.method === "GET" && url.pathname === "/metrics") {
+      const metricsPublic = process.env.FTN_METRICS_PUBLIC === "true" && runtimeConfig.environment !== "production";
+      if (!metricsPublic && !authorize(req, "monitoring:read")) return json(res, 401, { error: "unauthorized", request_id: requestId });
       res.statusCode = 200;
       for (const [key, value] of Object.entries(securityHeaders())) res.setHeader(key, value);
       return textResponse(res, metricsText());
