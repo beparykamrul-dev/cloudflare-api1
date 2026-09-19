@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { discoverInventory } from "./inventory/discovery.js";
+import { handleInventoryApi } from "./inventory/api.js";
 import { getInventorySnapshot, setInventorySnapshot, loadInventorySnapshot, persistInventorySnapshot } from "./inventory/cache.js";
 import type { InventoryItem } from "./inventory/types.js";
 import { authorize, authorizationEnabled } from "./auth/authorize.js";
@@ -115,6 +116,11 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/services" || url.pathname === "/api/audit") { const result = await handleControlPlaneDataApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname.startsWith("/api/monitoring/")) { const result = await handleMonitoringApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname === "/api/webhooks/deployment-status" && req.method === "POST") { const result = await handleDeploymentStatusCallback(req.headers, await readRaw(req), context); return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
+    if (url.pathname.startsWith("/api/inventory/expected") || url.pathname === "/api/inventory/drift") {
+      const body = req.method === "POST" ? await readJson(req) : undefined;
+      const result = await handleInventoryApi(req, url, body);
+      if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) });
+    }
     if (url.pathname.startsWith("/api/deployments")) { const body = req.method === "POST" ? await readJson(req) : undefined; const result = await handleDeploymentApi(req, url.pathname, body, context, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
     if (url.pathname.startsWith("/api/cloudflare/")) { const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined; const result = await handleCloudflareResource(req, url.pathname, body, context); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
     if (url.pathname.startsWith("/api/dns/")) { const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined; const result = await handleDnsApi(req, url, body, context); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
