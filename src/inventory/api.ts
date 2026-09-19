@@ -18,9 +18,8 @@ export async function handleInventoryApi(
   if (req.method === "POST" && url.pathname === "/api/inventory/sync") {
     const principal = authorize(req, "inventory:sync");
     if (!principal) return { status: 401, body: { error: "unauthorized" } };
-    const observedAt = new Date().toISOString();
     const items = await discoverInventory();
-    const snapshot = setInventorySnapshot({ observedAt, items });
+    const snapshot = setInventorySnapshot(items);
     await persistInventorySnapshot(snapshot);
     if (context) await writeAudit({ requestId: context.requestId, actorId: principal.id, action: "inventory.sync", result: "success", resource: "inventory", metadata: { count: items.length, observedAt } });
     return { status: 200, body: { observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items } };
