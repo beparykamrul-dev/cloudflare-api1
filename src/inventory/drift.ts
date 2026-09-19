@@ -1,6 +1,6 @@
 import type { InventoryItem } from "./types.js";
 
-export type DriftStatus = "MISSING" | "EXTRA" | "CHANGED" | "OK";
+export type DriftStatus = "MISSING" | "EXTRA" | "CHANGED" | "UNKNOWN" | "UNAUTHORIZED" | "OK";
 export type DriftItem = { key: string; status: DriftStatus; expected?: InventoryItem; observed?: InventoryItem };
 
 function key(item: InventoryItem) { return `${item.resourceType}:${item.resourceId}`; }
@@ -12,8 +12,13 @@ export function detectDrift(expected: InventoryItem[], observed: InventoryItem[]
   const result: DriftItem[] = [];
   for (const k of keys) {
     const e = expectedMap.get(k); const o = observedMap.get(k);
-    if (!e) result.push({ key: k, status: "EXTRA", observed: o });
-    else if (!o) result.push({ key: k, status: "MISSING", expected: e });
+    if (!e) {
+      if (o?.status === "UNKNOWN") result.push({ key: k, status: "UNKNOWN", observed: o });
+      else if (o?.status === "UNAUTHORIZED") result.push({ key: k, status: "UNAUTHORIZED", observed: o });
+      else result.push({ key: k, status: "EXTRA", observed: o });
+    } else if (!o) result.push({ key: k, status: "MISSING", expected: e });
+    else if (o.status === "UNKNOWN") result.push({ key: k, status: "UNKNOWN", expected: e, observed: o });
+    else if (o.status === "UNAUTHORIZED") result.push({ key: k, status: "UNAUTHORIZED", expected: e, observed: o });
     else if (e.name !== o.name || e.scope !== o.scope) result.push({ key: k, status: "CHANGED", expected: e, observed: o });
     else result.push({ key: k, status: "OK", expected: e, observed: o });
   }
