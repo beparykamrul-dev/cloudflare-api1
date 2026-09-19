@@ -163,6 +163,7 @@ export async function handleDeploymentApi(
       if (running) await persistDeployment(running);
       return { status: 202, body: { deployment: running ?? record, rollback_of: targetId } };
     } catch (error) {
+      await releaseDeploymentLease(record.id);
       const failed = transitionDeployment(record.id, "failed", error instanceof Error ? error.message : "workflow_dispatch_failed");
       if (failed) await persistDeployment(failed);
       await audit(context, principal.id, "deployment.rollback.dispatch", "failed", record.id, { rollbackOf: targetId, environment: target.environment });
