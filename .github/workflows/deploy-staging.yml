@@ -1,4 +1,5 @@
 name: Deploy Staging
+run-name: FTN deployment ${{ inputs.deployment_id }}
 
 on:
   workflow_dispatch:
