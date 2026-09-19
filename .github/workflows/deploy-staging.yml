@@ -35,6 +35,17 @@ jobs:
         with:
           name: ftn-cloudflare-api-staging-${{ github.sha }}
           path: ftn-cloudflare-api-${{ github.sha }}.tar.gz
+      - name: Deploy immutable release
+        env:
+          FTN_DEPLOY_COMMAND: ${{ secrets.FTN_DEPLOY_COMMAND }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          RELEASE_ARCHIVE: ftn-cloudflare-api-${{ github.sha }}.tar.gz
+        run: |
+          set -eu
+          test -n "$FTN_DEPLOY_COMMAND"
+          test -f "$RELEASE_ARCHIVE"
+          eval "$FTN_DEPLOY_COMMAND"
 
   callback:
     if: always()
