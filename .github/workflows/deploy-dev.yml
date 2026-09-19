@@ -14,7 +14,6 @@ permissions:
 concurrency:
   group: ftn-development-${{ inputs.deployment_id }}
   cancel-in-progress: false
-  cancel-in-progress: false
 
 jobs:
   build:
