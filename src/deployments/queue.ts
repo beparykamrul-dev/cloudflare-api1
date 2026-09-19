@@ -46,6 +46,7 @@ export function syncDeploymentCallback(
   if (!record) return undefined;
   if (!terminalStatuses.has(status)) throw new Error("invalid_terminal_status");
   if (terminalStatuses.has(record.status) && record.status !== status) throw new Error("deployment_already_terminal");
+  if (record.status === status && terminalStatuses.has(status)) return record;
   record.status = status;
   if (options.error) record.error = options.error;
   record.finishedAt = record.finishedAt ?? new Date().toISOString();
