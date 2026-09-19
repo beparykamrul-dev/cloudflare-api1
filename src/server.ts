@@ -4,7 +4,7 @@ import { discoverInventory } from "./inventory/discovery.js";
 import { getInventorySnapshot, setInventorySnapshot } from "./inventory/cache.js";
 import type { InventoryItem } from "./inventory/types.js";
 import { authorize, authorizationEnabled } from "./auth/authorize.js";
-import { loadApiTokens } from "./auth/token-store.js";
+import { loadApiTokens, startApiTokenRefresh } from "./auth/token-store.js";
 import { allowRequest, rateLimitKey } from "./security/rate-limit.js";
 import { handleCloudflareResource } from "./cloudflare/resource-api.js";
 import { normalizeCloudflareError } from "./cloudflare/validation.js";
@@ -24,7 +24,10 @@ const port = Number(process.env.PORT ?? 8080);
 assertProductionConfig();
 const runtimeConfig = securityConfig();
 if (!Number.isFinite(port) || port < 1 || port > 65535) throw new Error("invalid_port");
-if (authorizationEnabled()) await loadApiTokens();
+if (authorizationEnabled()) {
+  await loadApiTokens();
+  startApiTokenRefresh();
+}
 try {
   await hydrateAlerts();
 } catch (error) {
