@@ -210,6 +210,19 @@ export async function handleDeploymentStatusCallback(
   if (expectedEnvironment !== current.environment) return { status: 409, body: { error: "callback_environment_mismatch" } };
   if (current.status && terminalStatuses.has(current.status) && current.status !== status) return { status: 409, body: { error: "deployment_already_terminal" } };
 
+  const callbackVersion = text(payload.version);
+  if (callbackVersion && current.commit_sha && callbackVersion !== current.commit_sha) return { status: 409, body: { error: "callback_commit_mismatch" } };
+  if (current.status === status) {
+    return { status: 200, body: { deployment: {
+      deployment_id: deploymentId,
+      service_id: current.service_id,
+      environment: current.environment,
+      status: current.status,
+      health_status: current.health_status,
+      version: current.version ?? current.commit_sha
+    }, idempotent: true } };
+  }
+
   const errorMessage = text(payload.error);
   const version = text(payload.version) ?? current.commit_sha ?? null;
   const updated = await getDb().query(
