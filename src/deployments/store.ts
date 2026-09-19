@@ -42,3 +42,23 @@ export async function listPersistedDeployments(limit = 100): Promise<unknown[]> 
   );
   return result.rows;
 }
+
+
+export async function acquireDeploymentLease(serviceId: string, environment: string, deploymentId: string, leaseSeconds = 900): Promise<boolean> {
+  const seconds = Math.min(Math.max(Math.trunc(leaseSeconds), 30), 86400);
+  const result = await getDb().query(
+    `INSERT INTO ftn_deployment_locks (service_id, environment, deployment_id, lease_until)
+     VALUES ($1,$2,$3,now() + ($4 * interval '1 second'))
+     ON CONFLICT (service_id, environment) DO UPDATE
+       SET deployment_id=EXCLUDED.deployment_id,
+           lease_until=EXCLUDED.lease_until
+       WHERE ftn_deployment_locks.lease_until <= now()
+     RETURNING deployment_id`,
+    [serviceId, environment, deploymentId, seconds]
+  );
+  return result.rowCount === 1;
+}
+
+export async function releaseDeploymentLease(deploymentId: string): Promise<void> {
+  await getDb().query("DELETE FROM ftn_deployment_locks WHERE deployment_id=$1", [deploymentId]);
+}
