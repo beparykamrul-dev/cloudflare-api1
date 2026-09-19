@@ -21,9 +21,10 @@ export async function dispatchDeploymentWorkflow(input: {
   const token = required("GITHUB_ACTIONS_TOKEN");
   const workflows = { development: "deploy-dev.yml", staging: "deploy-staging.yml", production: "deploy-production.yml" } as const;
   const configured = process.env.GITHUB_DEPLOY_WORKFLOW;
-  const workflow = configured && Object.values(workflows).includes(configured as typeof workflows[keyof typeof workflows])
-    ? configured
-    : workflows[input.environment];
+  if (configured && configured !== workflows[input.environment]) {
+    throw new Error("workflow_mismatch");
+  }
+  const workflow = workflows[input.environment];
   const [owner, repo] = input.repository.split("/");
   if (!owner || !repo || input.repository.split("/").length !== 2) throw new Error("invalid_repository");
   const timeoutMs = positiveTimeout("github_actions_timeout_ms", process.env.GITHUB_ACTIONS_TIMEOUT_MS, 15_000);
