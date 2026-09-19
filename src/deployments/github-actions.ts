@@ -60,7 +60,7 @@ export async function dispatchDeploymentWorkflow(input: {
   if (!response.ok) throw new Error(`github_workflow_dispatch_failed:${response.status}`);
 
   const dispatchedAt = new Date().toISOString();
-  const run = await findDispatchedWorkflowRun({ owner, repo, workflow, ref: input.ref, token, after: dispatchedAt });
+  const run = await findDispatchedWorkflowRun({ owner, repo, workflow, ref: input.ref, token, after: dispatchedAt, deploymentId: input.deploymentId });
   return { workflow, dispatchedAt, ...run };
 }
 
@@ -71,6 +71,7 @@ async function findDispatchedWorkflowRun(input: {
   ref: string;
   token: string;
   after: string;
+  deploymentId: string;
 }): Promise<{ runId?: number; runUrl?: string; runStatus?: string }> {
   const waitMs = positiveTimeout("github_workflow_run_lookup_timeout_ms", process.env.GITHUB_WORKFLOW_RUN_LOOKUP_TIMEOUT_MS, 8_000);
   const deadline = Date.now() + waitMs;
@@ -85,9 +86,9 @@ async function findDispatchedWorkflowRun(input: {
         signal: controller.signal
       });
       if (response.ok) {
-        const payload = await response.json() as { workflow_runs?: Array<{ id?: number; html_url?: string; status?: string; created_at?: string }> };
+        const payload = await response.json() as { workflow_runs?: Array<{ id?: number; html_url?: string; status?: string; created_at?: string; display_title?: string }> };
         const afterMs = new Date(input.after).getTime();
-        const match = (payload.workflow_runs ?? []).find((run) => typeof run.id === "number" && typeof run.created_at === "string" && new Date(run.created_at).getTime() >= afterMs);
+        const match = (payload.workflow_runs ?? []).find((run) => typeof run.id === "number" && typeof run.created_at === "string" && new Date(run.created_at).getTime() >= afterMs && typeof run.display_title === "string" && run.display_title.includes(input.deploymentId));
         if (match?.id) return { runId: match.id, runUrl: match.html_url, runStatus: match.status };
       }
     } catch {
