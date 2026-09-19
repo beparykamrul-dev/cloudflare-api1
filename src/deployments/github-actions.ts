@@ -36,6 +36,7 @@ export async function dispatchDeploymentWorkflow(input: {
   const [owner, repo] = input.repository.split("/");
   if (!owner || !repo || input.repository.split("/").length !== 2) throw new Error("invalid_repository");
   const timeoutMs = positiveTimeout("github_actions_timeout_ms", process.env.GITHUB_ACTIONS_TIMEOUT_MS, 15_000);
+  const dispatchedAt = new Date().toISOString();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
@@ -59,7 +60,6 @@ export async function dispatchDeploymentWorkflow(input: {
   }
   if (!response.ok) throw new Error(`github_workflow_dispatch_failed:${response.status}`);
 
-  const dispatchedAt = new Date().toISOString();
   const run = await findDispatchedWorkflowRun({ owner, repo, workflow, ref: input.ref, token, after: dispatchedAt, deploymentId: input.deploymentId });
   return { workflow, dispatchedAt, ...run };
 }
