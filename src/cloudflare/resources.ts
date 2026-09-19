@@ -95,3 +95,7 @@ export async function listZoneWorkerRoutes(zoneId: string): Promise<unknown> {
   if (!workers) throw new Error("cloudflare_worker_routes_api_unavailable");
   return workers.routes.list({ zone_id: zoneId });
 }
+
+export async function listPages<T = unknown>(path: string): Promise<T> {
+  return accountList(path) as Promise<T>;
+}
