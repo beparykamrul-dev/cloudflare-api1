@@ -12,7 +12,8 @@ async function listApi(path: string): Promise<Resource[]> {
     const response = await fetch(`${API_BASE}${path}?page=${page}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     });
-    if (response.status === 401 || response.status === 403 || response.status === 404) return [];
+    if (response.status === 401 || response.status === 403) throw new Error(`cloudflare_inventory_unauthorized:${response.status}`);
+    if (response.status === 404) return [];
     if (!response.ok) throw new Error(`Cloudflare API ${response.status} for ${path}`);
     const body = (await response.json()) as ApiEnvelope<Resource[] | Resource>;
     if (!body.success || body.result == null) return items;
