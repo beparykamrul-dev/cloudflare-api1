@@ -2,8 +2,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 function required(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`${name}_required`);
+  if (!value) throw new Error(name + "_required");
   return value;
+}
+
+function positiveTimeout(name: string, value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("invalid_" + name);
+  return Math.max(1_000, Math.floor(parsed));
 }
 
 export async function dispatchDeploymentWorkflow(input: {
@@ -16,19 +22,24 @@ export async function dispatchDeploymentWorkflow(input: {
   const workflow = process.env.GITHUB_DEPLOY_WORKFLOW ?? "deploy.yml";
   const [owner, repo] = input.repository.split("/");
   if (!owner || !repo || input.repository.split("/").length !== 2) throw new Error("invalid_repository");
-  const timeoutMs = Math.max(1_000, Number(process.env.GITHUB_ACTIONS_TIMEOUT_MS ?? 15_000));
+  const timeoutMs = positiveTimeout("github_actions_timeout_ms", process.env.GITHUB_ACTIONS_TIMEOUT_MS, 15_000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: input.ref, inputs: { environment: input.environment, deployment_id: input.deploymentId } }),
-    signal: controller.signal
-  });
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ ref: input.ref, inputs: { environment: input.environment, deployment_id: input.deploymentId } }),
+      signal: controller.signal
+    });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw new Error("github_workflow_dispatch_timeout");
+    if (error instanceof Error && error.name === "AbortError") throw new Error("github_workflow_dispatch_timeout");
     throw new Error("github_workflow_dispatch_unreachable");
   } finally {
     clearTimeout(timeout);
