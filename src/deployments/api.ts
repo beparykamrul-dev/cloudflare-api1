@@ -195,9 +195,10 @@ export async function handleDeploymentStatusCallback(
   const current = result.rows[0] as { service_id?: string; environment?: string; commit_sha?: string; status?: string; health_status?: string; metadata?: Record<string, unknown>; started_at?: string | Date | null };
   const metadata = current.metadata ?? {};
   const repository = typeof metadata.repository === "string" ? metadata.repository : undefined;
-  if (expectedRepository && expectedRepository !== repository) return { status: 409, body: { error: "callback_repository_mismatch" } };
-  if (expectedServiceId && expectedServiceId !== current.service_id) return { status: 409, body: { error: "callback_service_mismatch" } };
-  if (expectedEnvironment && expectedEnvironment !== current.environment) return { status: 409, body: { error: "callback_environment_mismatch" } };
+  if (!expectedRepository || !expectedServiceId || !expectedEnvironment) return { status: 400, body: { error: "callback_identity_required" } };
+  if (expectedRepository !== repository) return { status: 409, body: { error: "callback_repository_mismatch" } };
+  if (expectedServiceId !== current.service_id) return { status: 409, body: { error: "callback_service_mismatch" } };
+  if (expectedEnvironment !== current.environment) return { status: 409, body: { error: "callback_environment_mismatch" } };
   if (current.status && terminalStatuses.has(current.status) && current.status !== status) return { status: 409, body: { error: "deployment_already_terminal" } };
 
   const errorMessage = text(payload.error);
@@ -211,11 +212,11 @@ export async function handleDeploymentStatusCallback(
             metadata=metadata || $5::jsonb
       WHERE deployment_id=$1
       RETURNING deployment_id, service_id, environment, status, health_status, version, finished_at`,
-    [deploymentId, status, text(payload.health_status), version, JSON.stringify({ callback: true, error: errorMessage })]
+    [deploymentId, status, text(payload.health_status), version, JSON.stringify({ callback: true, error_reported: Boolean(errorMessage) })]
   );
   const row = updated.rows[0] as { service_id?: string; environment?: string; status?: string };
 
-  const local = syncDeploymentCallback(deploymentId, status, { error: errorMessage });
+  const local = syncDeploymentCallback(deploymentId, status, { error: errorMessage ? "workflow_reported_error" : undefined });
   if (local && local.status === status) {
     const startedMs = current.started_at ? new Date(current.started_at).getTime() : undefined;
     const duration = startedMs !== undefined && Number.isFinite(startedMs) ? (Date.now() - startedMs) / 1000 : undefined;
