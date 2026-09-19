@@ -5,13 +5,13 @@
   "type": "module",
   "engines": {"node": ">=22"},
   "scripts": {
-    "dev": "tsx src/server.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node --env-file-if-exists=.env dist/server.js",
     "live": "npm run validate:config && npm run build && npm run db:migrate && npm start",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "validate:config": "node scripts/validate-config.mjs",
-    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx src/db/migrate.ts",
     "auth:token": "tsx scripts/create-api-token.ts",
     "test": "node --import tsx --test test/*.test.ts"
   },
