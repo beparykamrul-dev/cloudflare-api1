@@ -16,26 +16,34 @@ import { handleMonitoringApi } from "./monitoring/api.js";
 import { handleControlPanelApi } from "./control-panel/api.js";
 import { handleControlPlaneDataApi } from "./control-panel/data-api.js";
 import { controlPanelHtml } from "./control-panel/ui.js";
-import { assertProductionConfig } from "./security/config.js";
+import { assertProductionConfig, securityConfig } from "./security/config.js";
 import { securityHeaders } from "./security/headers.js";
 import { checkDb } from "./db/client.js";
 
 const port = Number(process.env.PORT ?? 8080);
 assertProductionConfig();
+const runtimeConfig = securityConfig();
+if (!Number.isFinite(port) || port < 1 || port > 65535) throw new Error("invalid_port");
 if (authorizationEnabled()) await loadApiTokens();
 try {
   await hydrateAlerts();
 } catch (error) {
   console.warn(JSON.stringify({ event: "alert_hydration_skipped", error: error instanceof Error ? error.message : "unknown_error" }));
 }
-const maxBodyBytes = Number(process.env.FTN_MAX_BODY_BYTES ?? 1024 * 1024);
-const inventoryTtlMs = Number(process.env.FTN_INVENTORY_CACHE_TTL_MS ?? 30000);
+const maxBodyBytes = runtimeConfig.maxBodyBytes;
+const inventoryTtlMs = Math.max(1_000, Number(process.env.FTN_INVENTORY_CACHE_TTL_MS ?? 30000));
 
 function json(res: import("node:http").ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader("content-type", "application/json; charset=utf-8");
   for (const [key, value] of Object.entries(securityHeaders())) res.setHeader(key, value);
   res.end(JSON.stringify(body));
+}
+
+function textResponse(res: import("node:http").ServerResponse, body: string): void {
+  for (const [key, value] of Object.entries(securityHeaders())) res.setHeader(key, value);
+  res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8");
+  res.end(body);
 }
 
 async function readRaw(req: import("node:http").IncomingMessage): Promise<string> {
@@ -91,7 +99,11 @@ const server = createServer(async (req, res) => {
       const ready = dbReady && cloudflareReady;
       return json(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", checks: { database: dbReady, cloudflare: cloudflareReady }, request_id: requestId });
     }
-    if (req.method === "GET" && url.pathname === "/metrics") { res.statusCode = 200; res.setHeader("content-type", "text/plain; version=0.0.4; charset=utf-8"); return res.end(metricsText()); }
+    if (req.method === "GET" && url.pathname === "/metrics") {
+      res.statusCode = 200;
+      for (const [key, value] of Object.entries(securityHeaders())) res.setHeader(key, value);
+      return textResponse(res, metricsText());
+    }
     if (req.method === "GET" && url.pathname === "/api/auth/me") { const principal = authorize(req, "services:read"); if (!principal) return json(res, 401, { error: "unauthorized", request_id: requestId }); return json(res, 200, { request_id: requestId, principal }); }
     if (url.pathname === "/api/panel" && req.method === "GET") { const result = handleControlPanelApi(req, url.pathname); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
     if (url.pathname === "/api/services" || url.pathname === "/api/audit") { const result = await handleControlPlaneDataApi(req, url.pathname, url.searchParams); if (result) return json(res, result.status, { request_id: requestId, ...(result.body as Record<string, unknown>) }); }
@@ -102,7 +114,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname.startsWith("/api/dns/")) { const body = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" ? await readJson(req) : undefined; const result = await handleDnsApi(req, url, body, context); if (result) return json(res, result.status, { request_id: requestId, ...(result.body && typeof result.body === "object" ? result.body : { result: result.body }) }); }
     if (req.method === "GET" && url.pathname === "/api/inventory") { if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }); const snapshot = await inventory(url.searchParams.get("refresh") === "true"); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: snapshot.items.length, items: snapshot.items }); }
     if (req.method === "GET" && url.pathname.startsWith("/api/inventory/")) { if (!authorize(req, "inventory:read")) return json(res, 401, { error: "unauthorized", request_id: requestId }); const kind = url.pathname.split("/").pop(); const snapshot = await inventory(false); const aliases: Record<string, string> = { accounts: "account", zones: "zone", workers: "worker", storage: "r2_bucket", ai: "ai_gateway", queues: "queue", kv: "kv_namespace", d1: "d1_database", vectorize: "vectorize_index", hyperdrive: "hyperdrive", containers: "container" }; const resourceType = aliases[kind ?? ""]; if (!resourceType) return json(res, 404, { error: "unknown_inventory_scope", request_id: requestId }); const items = snapshot.items.filter((item) => item.resourceType === resourceType); return json(res, 200, { request_id: requestId, observed_at: snapshot.observedAt, count: items.length, items }); }
-    if (req.method === "GET" && url.pathname === "/panel") { res.statusCode = 200; res.setHeader("content-type", "text/html; charset=utf-8"); return res.end(controlPanelHtml()); }
+    if (req.method === "GET" && url.pathname === "/panel") { res.statusCode = 200; res.setHeader("content-type", "text/html; charset=utf-8"); for (const [key, value] of Object.entries(securityHeaders())) res.setHeader(key, value); return res.end(controlPanelHtml()); }
     return json(res, 404, { error: "not_found", request_id: requestId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error"; console.error(JSON.stringify({ request_id: requestId, error: message }));
