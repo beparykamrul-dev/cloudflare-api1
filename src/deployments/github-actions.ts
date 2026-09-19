@@ -19,7 +19,7 @@ export async function dispatchDeploymentWorkflow(input: {
   deploymentId: string;
 }): Promise<void> {
   const token = required("GITHUB_ACTIONS_TOKEN");
-  const workflow = process.env.GITHUB_DEPLOY_WORKFLOW ?? "deploy.yml";
+  const workflow = process.env.GITHUB_DEPLOY_WORKFLOW ?? ({ development: "deploy-dev.yml", staging: "deploy-staging.yml", production: "deploy-production.yml" } as const)[input.environment];
   const [owner, repo] = input.repository.split("/");
   if (!owner || !repo || input.repository.split("/").length !== 2) throw new Error("invalid_repository");
   const timeoutMs = positiveTimeout("github_actions_timeout_ms", process.env.GITHUB_ACTIONS_TIMEOUT_MS, 15_000);
