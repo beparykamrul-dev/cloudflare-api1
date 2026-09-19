@@ -190,14 +190,19 @@ export async function handleDeploymentApi(
     const repository = "repository" in row && typeof row.repository === "string"
       ? row.repository
       : (typeof metadata.repository === "string" ? metadata.repository : undefined);
+    const serviceId = "service_id" in row
+      ? row.service_id
+      : ("serviceId" in row ? row.serviceId : undefined);
+    const environment = "environment" in row ? row.environment : undefined;
     const runId = typeof metadata.github_run_id === "number" ? metadata.github_run_id : Number(metadata.github_run_id);
+    if (!serviceId || !environment) return { status: 409, body: { error: "deployment_identity_unavailable" } };
     if (repository && Number.isInteger(runId) && runId > 0) {
       try {
         await cancelDeploymentWorkflow({ repository, runId });
       } catch (error) {
         await audit(context, principal.id, "deployment.cancel", "failed", id, {
-          serviceId: row.service_id,
-          environment: row.environment,
+          serviceId,
+          environment,
           reason: error instanceof Error ? error.message : "github_cancel_failed"
         });
         return { status: 502, body: { error: "github_workflow_cancel_failed" } };
@@ -223,7 +228,7 @@ export async function handleDeploymentApi(
       await releaseDeploymentLease(id);
       result = updated.rows[0] ?? null;
     }
-    await audit(context, principal.id, "deployment.cancelled", "success", id, { serviceId: row.service_id, environment: row.environment, githubRunId: Number.isInteger(runId) ? runId : undefined });
+    await audit(context, principal.id, "deployment.cancelled", "success", id, { serviceId, environment, githubRunId: Number.isInteger(runId) ? runId : undefined });
     return { status: 200, body: { deployment: result } };
   }
 
